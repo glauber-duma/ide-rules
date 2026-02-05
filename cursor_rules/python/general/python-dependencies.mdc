@@ -1,0 +1,1314 @@
+---
+Rule: python-dependencies.mdc
+Description: Diretrizes para gerenciamento de dependências Python usando pip, poetry, conda e ferramentas de segurança, cobrindo versionamento, ambientes virtuais e governança.
+globs: ["**/requirements*.txt", "**/pyproject.toml", "**/setup.py", "**/setup.cfg", "**/Pipfile", "**/conda.yml", "**/enviroment.yml"]
+alwaysApply: false
+tags: ["fastapi", "api", "dependencies"]
+Author: Glauber Duma
+Created: 2026-01
+---
+
+# Python - Gerenciamento de Dependências
+
+## 1. Objetivo
+
+Estabelecer padrões para gerenciamento de dependências Python, garantindo:
+- **Reprodutibilidade** de ambiente entre desenvolvimento, teste e produção
+- **Segurança** através de versionamento controlado e auditoria
+- **Performance** com otimização de instalação e cache
+- **Governança** de dependências corporativas e licenças
+- **Manutenibilidade** com atualizações controladas e compatibilidade
+
+---
+
+## 2. Estratégias de Gerenciamento
+
+### 📦 **Escolha da Ferramenta**
+
+```python
+"""
+Comparação de ferramentas de gerenciamento de dependências
+"""
+
+# ==== PIP + requirements.txt (abordagem tradicional) ====
+# Prós: universal, simples, compatível com tudo
+# Contras: sem lock file nativo, resolução limitada
+# Uso: projetos simples, sistemas legados, CI/CD básico
+
+# ==== pip-tools (pip-compile/pip-sync) ====
+# Prós: lock file determinístico, resolução estável, fácil de auditar
+# Contras: mais etapas no fluxo, exige arquivos .in
+# Uso: equipes que preferem requirements.txt, produção crítica
+
+# ==== Poetry ====
+# Prós: lock nativo, publicação simplificada, grupos de dependências
+# Contras: curva de aprendizado, empacotamento opinativo
+# Uso: novos projetos, libs internas, CI/CD moderno
+
+# ==== Conda (conda/mamba) ====
+# Prós: gerencia libs nativas (C/C++), ótimo para ciência de dados
+# Contras: mistura de canais/versões, lock menos padronizado
+# Uso: workloads científicos, dependências pesadas nativas
+
+# ==== Pipenv ====
+# Prós: simples para times menores, lock nativo
+# Contras: menos popular hoje, ecossistema menor
+# Uso: projetos legados com Pipenv
+```
+
+## 3. Configuração com requirements.txt
+
+### 📋 **Estrutura de requirements múltiplos**
+
+```txt
+|---requirements/
+|---base.txt         # dependências base (produção)
+|---development.txt  # dependências de desenvolvimento
+|---testing.txt      # dependências de testes
+|---production.txt   # dependências de produção
+|---optional.txt     # dependências opcionais por feature
+```
+
+### 📋 **requirements/base.txt**
+
+```txt
+# requirements/base.txt
+# Core dependencies for production.
+
+# === WEB framework ===
+fastapi==0.115.5
+uvicorn[standard]==0.30.6
+pydantic==2.8.2
+pydantic-settings==2.5.2
+
+# === Database ===
+sqlalchemy==2.0.36
+asyncpg==0.29.0
+alembic==1.13.2
+
+# === Http client ===
+httpx==0.27.2
+
+# === Logging and monitoring ===
+structlog==24.2.0
+prometheus-client==0.20.0
+
+# === Messaging ===
+aiokafka==0.10.0
+pika==1.3.2
+
+# === Security ===
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# === Utilities ===
+orjson==3.10.7
+python-dotenv==1.0.1
+
+# === Dependency injection ===
+dependency-injector==4.41.0
+```
+
+### 📋 **requirements/development.txt**
+
+```txt
+# requirements/development.txt
+# Dependências de ambiente de desenvolvimento
+
+-r base.txt
+
+# === Code Quality ===
+black==24.8.0
+isort==5.13.2
+flake8==7.1.1
+mypy==1.11.2
+bandit==1.7.9
+ruff==0.6.5
+
+# === Pré Commit ===
+pre-commit==3.8.0
+
+# === Development Tools ===
+ipython==8.27.0
+rich==13.8.1
+
+# === API Documentation ===
+mkdocs==1.6.1
+mkdocs-material==9.5.34
+
+# === Dependency Management ===
+pip-tools==7.4.1
+```
+
+### 🧪 **requirements/testing.txt**
+
+```txt
+# requirements/testing.txt
+# Dependências de ambiente de teste
+
+-r base.txt
+
+# === Testing framework ===
+pytest==8.3.2
+pytest-asyncio==0.23.8
+pytest-xdist==3.6.1
+
+# === Coverage ===
+coverage==7.6.1
+
+# === Mocking ===
+pytest-mock==3.14.0
+respx==0.21.1
+
+# === Database testing ===
+pytest-postgresql==6.1.1
+
+# === Performance testing ===
+locust==2.31.4
+
+# === Factories ===
+factory-boy==3.3.1
+faker==26.2.0
+```
+
+### 🚀 **requirements/production.txt**
+
+```txt
+# requirements/production.txt
+# Dependências de ambiente de produção
+
+-r base.txt
+
+# === Production server ===
+gunicorn==23.0.0
+uvloop==0.20.0
+
+# === Monitoring ===
+prometheus-client==0.20.0
+opentelemetry-api==1.26.0
+opentelemetry-sdk==1.26.0
+opentelemetry-exporter-otlp==1.26.0
+
+# === Caching ===
+redis==5.0.8
+
+# === Security ===
+pyjwt==2.9.0
+```
+
+## 4. Configuração com Poetry
+
+### 📋 **pyproject.toml Completo**
+
+```toml
+[tool.poetry]
+name = "fastapi-project"
+version = "0.1.0"
+description = "FastAPI project template"
+authors = ["Glauber Duma <glauber.duma@empresa.com>"]
+readme = "README.md"
+packages = [{ include = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.115.5"
+uvicorn = { version = "^0.30.6", extras = ["standard"] }
+pydantic = "^2.8.2"
+pydantic-settings = "^2.5.2"
+httpx = "^0.27.2"
+structlog = "^24.2.0"
+python-dotenv = "^1.0.1"
+sqlalchemy = "^2.0.36"
+asyncpg = "^0.29.0"
+aiokafka = "^0.10.0"
+redis = "^5.0.8"
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.8.0"
+ruff = "^0.6.5"
+isort = "^5.13.2"
+mypy = "^1.11.2"
+pre-commit = "^3.8.0"
+ipython = "^8.27.0"
+
+[tool.poetry.group.test.dependencies]
+pytest = "^8.3.2"
+pytest-asyncio = "^0.23.8"
+pytest-xdist = "^3.6.1"
+coverage = "^7.6.1"
+pytest-mock = "^3.14.0"
+respx = "^0.21.1"
+factory-boy = "^3.3.1"
+faker = "^26.2.0"
+
+[tool.poetry.group.docs.dependencies]
+mkdocs = "^1.6.1"
+mkdocs-material = "^9.5.34"
+
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+
+[tool.isort]
+profile = "black"
+
+[tool.ruff]
+line-length = 88
+
+[tool.mypy]
+strict = true
+```
+
+## 5. Ambientes Virtuais
+
+### 🐍 **Criação e Ativação de Ambientes**
+
+```bash
+# ==== venv (nativo do Python) ====
+# Criar ambiente
+python -m venv .venv
+
+# Ativar (Linux/macOS)
+source .venv/bin/activate
+
+# Ativar (Windows)
+.venv\Scripts\activate
+
+# Desativar
+deactivate
+
+# ==== virtualenv (mais features) ====
+# Instalar
+pip install virtualenv
+
+# Criar ambiente
+virtualenv .venv
+
+# Criar com Python específico
+virtualenv -p python3.11 .venv
+
+# ==== Poetry (gerencia automaticamente) ====
+# Criar e usar ambiente
+poetry install  # cria .venv automaticamente
+poetry shell    # ativa o ambiente
+poetry run python script.py  # executa sem ativar
+
+# Configurar Poetry para criar .venv no projeto
+poetry config virtualenvs.in-project true
+
+# ==== Conda ====
+# Criar ambiente
+conda create -n myenv python=3.11
+
+# Ativar
+conda activate myenv
+
+# Desativar
+conda deactivate
+```
+
+### 📝 **.gitignore para Ambientes Virtuais**
+
+```txt
+# .gitignore
+# Python environments
+.venv/
+venv/
+env/
+ENV/
+.env
+.python-version
+
+# Poetry
+poetry.lock  # apenas se quiser lock por desenvolvedor
+
+# Conda
+.conda/
+env.yml.lock
+
+# Pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# PyCharm
+.idea/
+
+# VSCode
+.vscode/
+
+# Compiled
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+```
+
+### ⚙️ **Configuração de Ferramentas**
+
+```python
+# scripts/setup_dev_env.py
+"""Script para configurar ambiente de desenvolvimento."""
+import subprocess
+import sys
+from pathlib import Path
+
+
+def create_venv() -> None:
+    """Cria ambiente virtual."""
+    venv_path = Path(".venv")
+    if venv_path.exists():
+        print("✓ Ambiente virtual já existe")
+        return
+    
+    subprocess.run([sys.executable, "-m", "venv", ".venv"], check=True)
+    print("✓ Ambiente virtual criado")
+
+
+def install_dependencies() -> None:
+    """Instala dependências de desenvolvimento."""
+    pip_path = Path(".venv/bin/pip")
+    if not pip_path.exists():
+        pip_path = Path(".venv/Scripts/pip.exe")
+    
+    subprocess.run(
+        [str(pip_path), "install", "-r", "requirements/development.txt"],
+        check=True
+    )
+    print("✓ Dependências instaladas")
+
+
+def setup_pre_commit() -> None:
+    """Configura pre-commit hooks."""
+    subprocess.run(["pre-commit", "install"], check=True)
+    print("✓ Pre-commit configurado")
+
+
+def main() -> None:
+    """Executa setup completo."""
+    create_venv()
+    install_dependencies()
+    setup_pre_commit()
+    print("\n✓ Ambiente configurado com sucesso!")
+    print("Execute: source .venv/bin/activate")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+## 6. Versionamento Semântico
+
+### 📌 **Estratégias de pinning**
+
+```python
+# ==== Pin Exato (==) - Recomendado para produção ====
+fastapi==0.115.5
+uvicorn==0.30.6
+# Prós: reprodutibilidade total, sem surpresas
+# Contras: requer atualizações manuais frequentes
+# Uso: produção crítica, deployment determinístico
+
+# ==== Compatible Release (~=) - Permite patches ====
+fastapi~=0.115.0  # permite 0.115.x, não 0.116.0
+uvicorn~=0.30.0   # permite 0.30.x, não 0.31.0
+# Prós: recebe patches de segurança automaticamente
+# Contras: pode quebrar com bugs em patches
+# Uso: dependências estáveis, ambiente de desenvolvimento
+
+# ==== Caret (^) - Poetry style, permite menores ====
+fastapi = "^0.115.5"  # permite >=0.115.5, <1.0.0
+uvicorn = "^0.30.6"   # permite >=0.30.6, <1.0.0
+# Prós: atualizações de features compatíveis
+# Contras: mudanças de API em menores (raro mas possível)
+# Uso: libs seguindo SemVer rigorosamente
+
+# ==== Range (>=,<) - Controle fino ====
+fastapi>=0.115.0,<0.116.0
+uvicorn>=0.30.0,<0.31.0
+# Prós: controle explícito de versões aceitas
+# Contras: mais verboso
+# Uso: compatibilidade com múltiplas versões
+
+# ==== Greater Than (>) - EVITE EM PRODUÇÃO ====
+fastapi>0.100.0  # ❌ Aceita qualquer versão futura!
+# Prós: sempre atualizado
+# Contras: quebra em breaking changes
+# Uso: nunca em produção, apenas em exploração
+
+# ==== Wildcard (*) - NUNCA USE ====
+fastapi  # ❌ Sem versionamento!
+uvicorn>=2  # ❌ Muito permissivo!
+# Contras: não reproduzível, imprevisível
+# Uso: NUNCA
+
+# ==== Estratégia Recomendada por Ambiente ====
+# Produção: pin exato (==) com lock file
+# Staging: compatible release (~=) para validar patches
+# Development: caret (^) para explorar features
+# CI/CD: pin exato do lock file
+```
+
+### 🔐 **Exemplo de Política de Versionamento**
+
+```python
+# requirements/base.txt - Produção
+# Política: Pin exato + lock file + atualizações mensais controladas
+
+fastapi==0.115.5
+uvicorn[standard]==0.30.6
+pydantic==2.8.2
+sqlalchemy==2.0.36
+
+# requirements/development.txt - Desenvolvimento
+# Política: Compatible release para receber patches
+
+-r base.txt
+
+black~=24.8.0
+mypy~=1.11.0
+pytest~=8.3.0
+
+# pyproject.toml - Poetry com ranges conservadores
+[tool.poetry.dependencies]
+python = "^3.11"  # 3.11.x até <4.0
+fastapi = "^0.115.5"  # 0.115.5 até <1.0
+uvicorn = { version = "^0.30.6", extras = ["standard"] }
+```
+
+### 🔒 **Lock Files e Reprodutibilidade**
+
+```bash
+# ==== pip-tools workflow ====
+# 1) criar requirements.in
+printf "fastapi\nuvicorn\n" > requirements.in
+
+# 2) compilar para requirements.txt (lock)
+pip-compile --generate-hashes requirements.in
+
+# 3) instalar dependências exatamente como no lock
+pip-sync requirements.txt
+
+# 4) atualizar dependências
+pip-compile --upgrade
+
+# 5) verificar atualizações disponíveis
+pip list --outdated
+
+# ==== Poetry workflow ====
+# adicionar dependências
+poetry add fastapi uvicorn
+
+# instalar com lock
+poetry install
+
+# atualizar dependências
+poetry update
+
+# verificar atualizações disponíveis
+poetry show --outdated
+```
+
+## 6. Segurança de Dependências
+
+### 🔒 **Auditoria de segurança**
+
+```python
+"""
+Scripts para auditoria de segurança de dependências
+"""
+import json
+import subprocess
+from pathlib import Path
+
+
+def run_pip_audit(output_path: Path) -> None:
+    result = subprocess.run(
+        ["pip-audit", "-f", "json"],
+        capture_output=True,
+        text=True,
+        check=False
+    )
+    output_path.write_text(result.stdout)
+
+
+def run_safety(output_path: Path) -> None:
+    result = subprocess.run(
+        ["safety", "check", "--json"],
+        capture_output=True,
+        text=True,
+        check=False
+    )
+    output_path.write_text(result.stdout)
+
+
+def main() -> None:
+    reports_dir = Path("reports")
+    reports_dir.mkdir(exist_ok=True)
+    run_pip_audit(reports_dir / "pip-audit.json")
+    run_safety(reports_dir / "safety.json")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+```python
+"""
+Security Audit Report
+"""
+import json
+from pathlib import Path
+
+
+def summarize(report_path: Path) -> dict:
+    data = json.loads(report_path.read_text())
+    if isinstance(data, dict) and "vulnerabilities" in data:
+        vulns = data["vulnerabilities"]
+    elif isinstance(data, list):
+        vulns = data
+    else:
+        vulns = []
+
+    return {
+        "file": report_path.name,
+        "count": len(vulns),
+        "ids": sorted({v.get("id") or v.get("cve") for v in vulns if v})
+    }
+
+
+def main() -> None:
+    reports_dir = Path("reports")
+    summary = [summarize(p) for p in reports_dir.glob("*.json")]
+    print(json.dumps(summary, indent=2))
+
+
+if __name__ == "__main__":
+    main()
+```
+
+```python
+"""
+Scripts de automação
+"""
+from pathlib import Path
+import subprocess
+
+
+def audit_all() -> None:
+    subprocess.run(["pip-audit"], check=False)
+    subprocess.run(["safety", "check"], check=False)
+
+
+def export_license_report() -> None:
+    output = Path("reports/licenses.txt")
+    output.parent.mkdir(exist_ok=True)
+    result = subprocess.run(["pip-licenses"], capture_output=True, text=True)
+    output.write_text(result.stdout)
+
+
+def main() -> None:
+    audit_all()
+    export_license_report()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+## 7. Workflow de CI/CD
+
+### 🚀 **Github Actions para dependências**
+
+```yaml
+# .github/workflows/dependencies.yml
+name: Dependencies Audit
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"  # toda segunda 03:00 UTC
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit safety pip-licenses
+
+      - name: Install dependencies
+        run: |
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements/base.txt ]; then pip install -r requirements/base.txt; fi
+
+      - name: Run security audit
+        run: |
+          pip-audit || true
+          safety check || true
+
+      - name: License report
+        run: |
+          pip-licenses
+```
+
+## 8. Boas Práticas
+
+### ✅ **DO's - Práticas Recomendadas**
+
+#### ✅ Use lock files para reprodutibilidade
+
+```bash
+# ✅ CORRETO: pip-tools com lock file
+# requirements.in (dependências principais)
+fastapi
+uvicorn
+pydantic
+
+# Gerar requirements.txt com hashes (lock)
+pip-compile --generate-hashes requirements.in
+
+# Instalar exatamente o que está no lock
+pip-sync requirements.txt
+
+# ✅ CORRETO: Poetry com poetry.lock
+poetry add fastapi uvicorn
+poetry install  # usa poetry.lock
+poetry lock --no-update  # atualiza lock sem mudar versões
+
+# ✅ CORRETO: Commitar lock files no git
+git add requirements.txt poetry.lock
+git commit -m "Lock dependencies"
+```
+
+#### ✅ Separe dependências por ambiente
+
+```python
+# ✅ CORRETO: Estrutura organizada
+"""
+requirements/
+├── base.txt          # Produção
+├── development.txt   # Dev tools
+├── testing.txt       # Test frameworks
+├── production.txt    # Production servers
+└── optional.txt      # Features opcionais
+"""
+
+# requirements/base.txt
+fastapi==0.115.5
+uvicorn==0.30.6
+
+# requirements/development.txt
+-r base.txt
+black==24.8.0
+mypy==1.11.2
+ipython==8.27.0
+
+# requirements/testing.txt
+-r base.txt
+pytest==8.3.2
+pytest-asyncio==0.23.8
+
+# requirements/production.txt
+-r base.txt
+gunicorn==23.0.0
+prometheus-client==0.20.0
+
+# Instalar por ambiente
+pip install -r requirements/development.txt  # Dev
+pip install -r requirements/testing.txt      # CI
+pip install -r requirements/production.txt   # Prod
+```
+
+#### ✅ Use versionamento semântico conservador
+
+```python
+# ✅ CORRETO: Pin exato em produção
+fastapi==0.115.5
+uvicorn==0.30.6
+pydantic==2.8.2
+
+# ✅ CORRETO: Compatible release para patches
+black~=24.8.0  # permite 24.8.x
+mypy~=1.11.0   # permite 1.11.x
+
+# ✅ CORRETO: Range conservador
+sqlalchemy>=2.0.0,<2.1.0
+
+# ✅ CORRETO: Poetry com caret
+[tool.poetry.dependencies]
+fastapi = "^0.115.5"  # >=0.115.5, <1.0.0
+```
+
+#### ✅ Execute auditoria de segurança regularmente
+
+```python
+# scripts/security_audit.py
+"""Script de auditoria de segurança automatizada."""
+import subprocess
+import sys
+from datetime import datetime
+
+
+def run_pip_audit() -> bool:
+    """Executa pip-audit e retorna se encontrou vulnerabilidades."""
+    result = subprocess.run(
+        ["pip-audit", "--format", "json"],
+        capture_output=True,
+        check=False
+    )
+    return result.returncode != 0
+
+
+def run_safety() -> bool:
+    """Executa safety check."""
+    result = subprocess.run(
+        ["safety", "check", "--json"],
+        capture_output=True,
+        check=False
+    )
+    return result.returncode != 0
+
+
+def main() -> None:
+    """Executa auditoria completa."""
+    print(f"🔒 Security Audit - {datetime.now()}")
+    
+    has_vulns = False
+    
+    print("\n📦 Running pip-audit...")
+    if run_pip_audit():
+        print("❌ Vulnerabilities found by pip-audit")
+        has_vulns = True
+    else:
+        print("✅ No vulnerabilities found by pip-audit")
+    
+    print("\n🛡️  Running safety check...")
+    if run_safety():
+        print("❌ Vulnerabilities found by safety")
+        has_vulns = True
+    else:
+        print("✅ No vulnerabilities found by safety")
+    
+    if has_vulns:
+        print("\n⚠️  Please review and update vulnerable dependencies!")
+        sys.exit(1)
+    else:
+        print("\n✅ All security checks passed!")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+#### ✅ Monitore licenças de dependências
+
+```python
+# scripts/check_licenses.py
+"""Verifica licenças de dependências."""
+import subprocess
+import json
+from typing import List, Dict
+
+
+# Licenças permitidas pela empresa
+ALLOWED_LICENSES = {
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "BSD-2-Clause",
+    "Python Software Foundation",
+    "ISC",
+}
+
+
+def get_licenses() -> List[Dict[str, str]]:
+    """Obtém lista de licenças instaladas."""
+    result = subprocess.run(
+        ["pip-licenses", "--format", "json"],
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    return json.loads(result.stdout)
+
+
+def check_licenses() -> None:
+    """Verifica se todas as licenças são permitidas."""
+    licenses = get_licenses()
+    violations = []
+    
+    for pkg in licenses:
+        license_name = pkg.get("License", "Unknown")
+        if license_name not in ALLOWED_LICENSES:
+            violations.append({
+                "name": pkg["Name"],
+                "version": pkg["Version"],
+                "license": license_name
+            })
+    
+    if violations:
+        print("❌ License violations found:\n")
+        for v in violations:
+            print(f"  {v['name']} ({v['version']}): {v['license']}")
+        raise SystemExit(1)
+    else:
+        print("✅ All licenses are compliant")
+
+
+if __name__ == "__main__":
+    check_licenses()
+```
+
+#### ✅ Use cache em CI/CD
+
+```yaml
+# .github/workflows/ci.yml
+name: CI Pipeline
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      # ✅ CORRETO: Cache de pip
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'  # Automaticamente cacheia requirements.txt
+          cache-dependency-path: 'requirements/*.txt'
+      
+      - name: Install dependencies
+        run: pip install -r requirements/testing.txt
+      
+      # ✅ CORRETO: Cache de Poetry
+      - name: Setup Poetry
+        uses: snok/install-poetry@v1
+        with:
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+      
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v3
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+      
+      - name: Install dependencies
+        run: poetry install --no-interaction
+```
+
+#### ✅ Documente dependências opcionais
+
+```python
+# requirements/optional.txt
+"""Dependências opcionais por feature."""
+
+# Feature: PostgreSQL support
+# Instalar: pip install -r requirements/optional.txt --install-option="--extras=postgres"
+psycopg2-binary==2.9.9
+
+# Feature: Redis caching
+redis==5.0.8
+hiredis==2.3.2
+
+# Feature: AWS integration
+boto3==1.34.162
+
+# Feature: Monitoring
+prometheus-client==0.20.0
+opentelemetry-api==1.26.0
+
+# pyproject.toml com extras
+[tool.poetry.extras]
+postgres = ["psycopg2-binary"]
+redis = ["redis", "hiredis"]
+aws = ["boto3"]
+monitoring = ["prometheus-client", "opentelemetry-api"]
+
+# Instalar extras específicos
+# poetry install --extras "postgres redis"
+# pip install -e ".[postgres,redis]"
+
+# setup.py com extras
+setup(
+    name="myproject",
+    extras_require={
+        "postgres": ["psycopg2-binary==2.9.9"],
+        "redis": ["redis==5.0.8", "hiredis==2.3.2"],
+        "aws": ["boto3==1.34.162"],
+        "all": [
+            "psycopg2-binary==2.9.9",
+            "redis==5.0.8",
+            "hiredis==2.3.2",
+            "boto3==1.34.162",
+        ],
+    },
+)
+```
+
+### ❌ **DON'Ts - Práticas a Evitar**
+
+#### ❌ Não use versões sem restrições
+
+```python
+# ❌ ERRADO: Sem versionamento
+fastapi
+uvicorn
+pydantic
+
+# ❌ ERRADO: Muito permissivo
+fastapi>=0.100
+pydantic>2
+sqlalchemy>=2  # Aceita 2.x, 3.x, 4.x...
+
+# ✅ CORRETO: Versionamento específico
+fastapi==0.115.5
+uvicorn==0.30.6
+pydantic==2.8.2
+
+# ✅ CORRETO: Range conservador
+fastapi>=0.115.0,<0.116.0
+pydantic>=2.8.0,<2.9.0
+
+# Por que evitar:
+# - Builds não reproduzíveis
+# - Breaking changes inesperados
+# - Dificulta debug de problemas
+# - Falhas em produção por incompatibilidade
+```
+
+#### ❌ Não misture ferramentas inconsistentemente
+
+```python
+# ❌ ERRADO: Múltiplas ferramentas sem critério
+# Projeto tem:
+# - requirements.txt
+# - pyproject.toml (Poetry)
+# - Pipfile
+# - conda.yml
+# Resultado: confusão total!
+
+# ❌ ERRADO: pip e poetry ao mesmo tempo
+pip install fastapi  # instalado com pip
+poetry add uvicorn   # instalado com poetry
+# Resultado: poetry.lock não reflete ambiente real
+
+# ❌ ERRADO: Mistura de pip e conda
+conda install numpy
+pip install pandas
+# Resultado: conflitos de versões, ambiente quebrado
+
+# ✅ CORRETO: Escolha UMA ferramenta por projeto
+# Opção 1: pip + requirements.txt
+pip install -r requirements.txt
+
+# Opção 2: Poetry
+poetry install
+
+# Opção 3: Conda (para data science)
+conda env create -f environment.yml
+
+# Se precisar misturar (casos raros):
+# 1. Use conda para dependências nativas (numpy, scipy)
+# 2. Use pip DENTRO do ambiente conda para o resto
+conda create -n myenv python=3.11
+conda activate myenv
+conda install numpy scipy
+pip install fastapi uvicorn
+```
+
+#### ❌ Não comite arquivos de ambiente virtual
+
+```bash
+# ❌ ERRADO: Commitar venv
+git add .venv/
+git add venv/
+git add __pycache__/
+
+# Por que evitar:
+# - Tamanho gigante do repo (centenas de MB)
+# - Arquivos binários específicos do OS
+# - Conflitos em merge
+# - Slow clone/pull
+
+# ✅ CORRETO: .gitignore adequado
+# .gitignore
+venv/
+.venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+
+# ✅ CORRETO: Commitar apenas especificações
+git add requirements.txt
+git add requirements/
+git add pyproject.toml
+git add poetry.lock
+
+# ✅ CORRETO: README com instruções
+# README.md
+# Setup
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements/development.txt
+```
+
+#### ❌ Não ignore alertas de segurança
+
+```python
+# ❌ ERRADO: Ignorar CVEs
+# pip-audit encontra:
+# "fastapi 0.95.0 has known security vulnerability CVE-2023-XXXX"
+# Desenvolvedor: "Ignora, depois eu atualizo"
+
+# ❌ ERRADO: Suprimir warnings
+pip install --no-warn-conflicts fastapi==0.95.0
+
+# ❌ ERRADO: Disable security checks no CI
+# .github/workflows/ci.yml
+pip-audit || true  # ❌ Ignora falhas
+safety check --continue-on-error  # ❌ Continua com vulnerabilidades
+
+# ✅ CORRETO: Trate vulnerabilidades imediatamente
+# 1. Atualize a dependência vulnerável
+pip install --upgrade fastapi
+pip-compile --upgrade-package fastapi
+
+# 2. Se não puder atualizar, documente o motivo
+# .safety-policy.yml
+security:
+  ignore:
+    - id: "CVE-2023-XXXX"
+      reason: "Aguardando fix no upstream, workaround aplicado"
+      expires: "2026-02-01"
+
+# 3. Configure alertas automáticos
+# .github/dependabot.yml
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
+```
+
+#### ❌ Não misture conda com pip no mesmo ambiente
+
+```bash
+# ❌ ERRADO: Instalação misturada
+conda create -n myenv python=3.11
+conda activate myenv
+conda install numpy pandas
+pip install scikit-learn tensorflow  # pode quebrar numpy/pandas do conda!
+
+# Por que evitar:
+# - Conda e pip usam resolvers diferentes
+# - Conflitos de versões
+# - Dependências duplicadas
+# - Ambiente quebrado difícil de debugar
+
+# ✅ CORRETO: Use apenas conda
+conda create -n myenv python=3.11
+conda activate myenv
+conda install numpy pandas scikit-learn tensorflow
+
+# ✅ CORRETO: Se precisar misturar (última opção)
+# 1. Instale tudo que puder pelo conda PRIMEIRO
+conda install numpy pandas scipy matplotlib
+
+# 2. Só então use pip para o que não existe no conda
+pip install fastapi uvicorn  # não disponível no conda
+
+# 3. NUNCA instale pelo pip algo que já foi instalado pelo conda
+
+# ✅ MELHOR: Use apenas pip/poetry para apps web
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+#### ❌ Não use sudo com pip
+
+```bash
+# ❌ ERRADO: Instalar globalmente com sudo
+sudo pip install fastapi
+sudo pip install -r requirements.txt
+
+# Por que evitar:
+# - Modifica Python do sistema
+# - Conflitos com gerenciador de pacotes do OS (apt, yum)
+# - Quebra ferramentas do sistema
+# - Problemas de permissão
+# - Difícil de reverter
+
+# ✅ CORRETO: Use ambiente virtual
+python -m venv .venv
+source .venv/bin/activate
+pip install fastapi
+
+# ✅ CORRETO: Use --user (se não puder usar venv)
+pip install --user fastapi
+
+# ✅ CORRETO: Em Docker, use venv mesmo sendo root
+# Dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Cria venv mesmo em container
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0"]
+```
+
+---
+
+## 9. Checklist de Governança
+
+### ✅ **Checklist para Novos Projetos**
+
+```python
+# Governança de Dependências - Checklist
+
+# 📋 Setup Inicial
+☐ Escolher ferramenta de gerenciamento (pip-tools, Poetry)
+☐ Criar estrutura de requirements por ambiente
+☐ Configurar .gitignore para ambientes virtuais
+☐ Definir política de versionamento (== para prod, ~= para dev)
+☐ Criar script de setup automatizado
+
+# 🔒 Segurança
+☐ Configurar pip-audit no CI/CD
+☐ Configurar safety check
+☐ Habilitar Dependabot/Renovate
+☐ Definir política de licenças permitidas
+☐ Criar workflow de auditoria semanal
+
+# 📦 Organização
+☐ Separar dependências por ambiente (base, dev, test, prod)
+☐ Documentar dependências opcionais
+☐ Criar README com instruções de setup
+☐ Versionar lock files (requirements.txt, poetry.lock)
+
+# 🔄 Atualização
+☐ Definir janela de atualização (ex: mensalmente)
+☐ Criar processo de teste para atualizações
+☐ Documentar breaking changes
+☐ Manter changelog de dependências
+
+# 🚀 CI/CD
+☐ Configurar cache de dependências
+☐ Validar lock files no PR
+☐ Executar security audit em todo PR
+☐ Verificar licenças automaticamente
+
+# 📊 Monitoramento
+☐ Alertas para vulnerabilidades críticas
+☐ Dashboard de dependências desatualizadas
+☐ Relatórios mensais de segurança
+☐ Tracking de technical debt
+```
+
+---
+
+## 10. Troubleshooting
+
+### 🔧 **Problemas Comuns e Soluções**
+
+```python
+# Problema 1: Conflito de dependências
+# Erro: "ERROR: Cannot install X and Y because these package versions have conflicting dependencies"
+
+# Solução:
+# 1. Use pip-compile para resolver
+pip-compile requirements.in --resolver=backtracking
+
+# 2. Identifique o conflito
+pip install pipdeptree
+pipdeptree --warn conflict
+
+# 3. Force uma versão específica
+# requirements.in
+package-a==1.0.0
+package-b==2.0.0
+
+# Problema 2: Lock file desatualizado
+# Erro: "poetry.lock is not consistent with pyproject.toml"
+
+# Solução:
+poetry lock --no-update
+
+# Problema 3: Dependências não encontradas
+# Erro: "Could not find a version that satisfies the requirement"
+
+# Solução:
+# 1. Verifique o nome do pacote
+pip search <package-name>
+
+# 2. Limpe o cache
+pip cache purge
+
+# 3. Use index alternativo
+pip install --index-url https://pypi.org/simple <package>
+
+# Problema 4: Ambiente corrompido
+
+# Solução:
+# 1. Recrie o ambiente
+rm -rf .venv
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# 2. Verifique integridade
+pip check
+
+# Problema 5: Instalação lenta
+
+# Solução:
+# 1. Use cache local
+pip install --cache-dir ~/.pip/cache -r requirements.txt
+
+# 2. Use wheels pré-compilados
+pip install --only-binary :all: -r requirements.txt
+
+# 3. Paralelizar instalação
+pip install --no-deps -r requirements.txt
+pip install -r requirements.txt
+```
+
+---
+
+Esta regra estabelece padrões sólidos para integração com banco de dados em aplicações Python/FastAPI, garantindo código limpo, performático e manutenível.

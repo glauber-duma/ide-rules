@@ -1,0 +1,2001 @@
+---
+Rule: python-style-guide.mdc
+Description: Guia para padrões de código Python, inclui nomenclatura, formatação, type hints e boas práticas de desenvolvimento
+globs: ["**/*.py", "**/*.pyi"]
+rules: @python-project-structure
+alwaysApply: false
+tags: ["python", "style", "best-practices"]
+Author: Glauber Duma
+Created: 2026-01
+---
+
+# Python Style Guide - Padrões e Boas Práticas
+
+Este guia estabelece padrões consistentes para escrita de código Python, garantindo legibilidade, manutenabilidade e qualidade em todos os projetos.
+
+## 🎯 **Princípios Fundamentais**
+
+### The Zen of Python (PEP 20)
+
+```python
+"""
+Beautiful is better than ugly.
+Explicit is better than implicit.
+Simple is better than complex.
+Complex is better than complicated.
+Flat is better than nested.
+Sparse is better than dense.
+Readability counts.
+Special cases aren't special enough to break the rules.
+Although practicality beats purity.
+Errors should never pass silently.
+Unless explicitly silenced.
+In the face of ambiguity, refuse the temptation to guess.
+There should be one-- and preferably only one --obvious way to do it.
+Although that way may not be obvious at first unless you're Dutch.
+Now is better than never.
+Although never is often better than *right* now.
+If the implementation is hard to explain, it's a bad idea.
+If the implementation is easy to explain, it may be a good idea.
+Namespaces are one honking great idea -- let's do more of those!
+"""
+```
+
+---
+
+## 📏 **Formatação e Estilo**
+
+### 1.1. Tamanho da Linha e Quebras
+
+```python
+# ✅ Correto - Máximo 88 caracteres (padrão Black)
+def calculate_user_statistics(
+    user_id: str,
+    start_date: datetime,
+    end_date: datetime,
+) -> dict[str, Any]:
+    """Calcula estatísticas do usuário no período."""
+    pass
+
+
+# ✅ Correto - Quebra de linha em expressões longas
+result = (
+    some_long_function_name(arg1, arg2, arg3)
+    .another_method(param1, param2)
+    .yet_another_method(param3)
+)
+
+# Lista com muitos elementos
+user_permissions = [
+    "read_posts",
+    "write_posts",
+    "delete_posts",
+    "manage_users",
+    "view_analytics",
+]
+
+# Dicionário formatado
+config = {
+    "database": {
+        "host": "localhost",
+        "port": 5432,
+        "name": "mydb",
+    },
+    "cache": {
+        "enabled": True,
+        "ttl": 300,
+    },
+}
+
+
+# ❌ Incorreto - Linha muito longa
+def calculate_user_statistics(user_id: str, start_date: datetime, end_date: datetime, include_inactive: bool = False, aggregate_by: str = "day") -> dict[str, Any]:
+    pass
+
+# ❌ Incorreto - Quebra inadequada
+result = some_long_function_name(arg1, arg2, arg3).another_method(
+    param1, param2).yet_another_method(param3)
+```
+
+---
+
+### 1.2. Espaçamento e Indentação
+
+```python
+# ✅ Correto - Quatro espaços para indentação
+def process_data(items: list[dict]) -> list[dict]:
+    """Processa lista de itens."""
+    results = []
+    
+    for item in items:
+        if item.get("active"):
+            processed = transform_item(item)
+            results.append(processed)
+    
+    return results
+
+
+# ✅ Correto - Espaçamento em operadores
+x = 1 + 2
+y = x * 3
+result = (a + b) * (c - d)
+
+# Espaçamento em chamadas de função
+my_function(arg1, arg2, kwarg1=value1, kwarg2=value2)
+
+# Espaçamento em slices (sem espaços)
+items[0:10]
+items[start:end:step]
+
+# Espaçamento em annotations
+def func(x: int, y: str = "default") -> bool:
+    pass
+
+
+# ❌ Incorreto - Espaçamento inconsistente
+x=1+2  # Sem espaços
+y = x*3  # Espaços inconsistentes
+result = ( a+b )*( c-d )  # Espaços errados
+
+# ❌ Incorreto - Espaços desnecessários
+my_function( arg1 , arg2 , kwarg1 = value1 )
+
+# ❌ Incorreto - Tabs ou mistura de tabs e espaços
+def bad_function():
+	return True  # Tab usado (evitar!)
+```
+
+---
+
+### 1.3. Organização dos Imports
+
+```python
+# ✅ Correto - Ordem e agrupamento padrão
+
+# Standard library
+import asyncio
+import json
+import logging
+import os
+import sys
+from collections import defaultdict
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from uuid import UUID, uuid4
+
+# Third-party packages
+import httpx
+import redis
+from fastapi import Depends, FastAPI, HTTPException, status
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+# Local imports
+from app.core.config import settings
+from app.core.security import verify_password
+from app.data.models.user import User
+
+# Relative imports (usar com moderação)
+from .dependencies import get_current_user
+from .schemas import UserResponse
+
+
+# ❌ Incorreto - Imports misturados e desordenados
+from app.core.config import settings
+import json
+from fastapi import FastAPI
+import os
+from .schemas import UserResponse
+from typing import Any
+from sqlalchemy import select
+import asyncio
+
+# ❌ Incorreto - Imports com wildcard (evitar!)
+from fastapi import *
+from typing import *
+
+# ❌ Incorreto - Imports não utilizados
+import pandas  # Não usado no código
+from datetime import datetime, timedelta, timezone  # timezone não usado
+```
+
+---
+
+## 🏷️ **Nomenclatura e Convenções**
+
+### 2.1. Variáveis e Funções (snake_case)
+
+```python
+# ✅ Correto - snake_case para variáveis e funções
+
+# Variáveis
+user_name = "John Doe"
+total_items = 100
+is_active = True
+max_retry_count = 3
+
+# Funções
+def calculate_total_price(items: list[float]) -> float:
+    """Calcula o preço total dos itens."""
+    return sum(items)
+
+
+def get_user_by_id(user_id: str) -> Optional[User]:
+    """Busca usuário pelo ID."""
+    pass
+
+
+def send_email_notification(to: str, subject: str, body: str) -> None:
+    """Envia notificação por email."""
+    pass
+
+
+# Nomes descritivos e significativos
+def validate_user_credentials(email: str, password: str) -> bool:
+    """Valida credenciais do usuário."""
+    pass
+
+
+# ❌ Incorreto - camelCase para variáveis e funções
+userName = "John Doe"  # Evitar!
+totalItems = 100  # Evitar!
+isActive = True  # Evitar!
+
+def calculateTotalPrice(items):  # Evitar!
+    pass
+
+def getUserById(userId):  # Evitar!
+    pass
+
+
+# ❌ Incorreto - Nomes não descritivos
+def f(x, y):  # Muito vago
+    pass
+
+a = 10  # Não diz nada sobre o propósito
+temp = get_data()  # Nome genérico demais
+```
+
+---
+
+### 2.2. Classes (PascalCase)
+
+```python
+# ✅ Correto - PascalCase para classes
+
+class UserAccount:
+    """Representa uma conta de usuário."""
+    
+    def __init__(self, email: str, username: str):
+        self.email = email
+        self.username = username
+
+
+class DatabaseConnection:
+    """Gerencia conexão com banco de dados."""
+    pass
+
+
+class EmailService:
+    """Serviço de envio de emails."""
+    pass
+
+
+class HTTPRequestHandler:
+    """Handler para requisições HTTP."""
+    pass
+
+
+# Classes base e abstratas
+class BaseRepository:
+    """Repositório base abstrato."""
+    pass
+
+
+class AbstractValidator:
+    """Validador abstrato."""
+    pass
+
+
+# Exceções personalizadas
+class UserNotFoundException(Exception):
+    """Exceção quando usuário não é encontrado."""
+    pass
+
+
+class InvalidCredentialsError(ValueError):
+    """Erro de credenciais inválidas."""
+    pass
+
+
+# ❌ Incorreto - Nomenclatura inadequada para classes
+class user_account:  # Deve ser PascalCase
+    pass
+
+class Userservice:  # Falta separação clara
+    pass
+
+class email_Service:  # Inconsistente
+    pass
+
+class HTTPrequestHandler:  # Siglas devem seguir o padrão
+    pass
+```
+
+---
+
+### 2.3. Constantes (UPPER_SNAKE_CASE)
+
+```python
+# ✅ Correto - Maiúsculas para constantes
+
+# Constantes numéricas
+MAX_RETRIES = 3
+DEFAULT_TIMEOUT = 30
+PAGE_SIZE = 20
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
+# Constantes string
+DEFAULT_ENCODING = "utf-8"
+API_VERSION = "v1"
+DATE_FORMAT = "%Y-%m-%d"
+
+# URLs e endpoints
+BASE_URL = "https://api.example.com"
+AUTH_ENDPOINT = "/auth/login"
+
+# Configurações
+DEBUG_MODE = False
+ENABLE_LOGGING = True
+
+# Constantes compostas (usando módulo ou classe)
+class HTTPStatus:
+    """Códigos de status HTTP."""
+    OK = 200
+    CREATED = 201
+    BAD_REQUEST = 400
+    UNAUTHORIZED = 401
+    NOT_FOUND = 404
+    INTERNAL_ERROR = 500
+
+
+class CacheKeys:
+    """Chaves de cache."""
+    USER_PREFIX = "user:"
+    SESSION_PREFIX = "session:"
+    TOKEN_PREFIX = "token:"
+
+
+# ❌ Incorreto - Nomenclatura inadequada para constantes
+Max_Retries = 3  # Deve ser UPPER_SNAKE_CASE
+maxRetries = 3  # Deve ser UPPER_SNAKE_CASE
+max_retries = 3  # Parece variável, não constante
+
+# ❌ Incorreto - "Constantes" que mudam
+MAX_USERS = 100
+MAX_USERS = 200  # Não deveria mudar!
+```
+
+---
+
+### 2.4. Private and Protected Members
+
+```python
+# ✅ Correto - Convenções de privacidade
+
+class User:
+    """Classe de usuário com membros privados e protegidos."""
+    
+    def __init__(self, username: str, password: str):
+        # Público - sem underscore
+        self.username = username
+        self.created_at = datetime.utcnow()
+        
+        # Protegido - um underscore (convenção, ainda acessível)
+        self._email = None
+        self._last_login = None
+        
+        # Privado - dois underscores (name mangling)
+        self.__password_hash = self._hash_password(password)
+    
+    # Método público
+    def login(self, password: str) -> bool:
+        """Método público para login."""
+        return self._verify_password(password)
+    
+    # Método protegido
+    def _verify_password(self, password: str) -> bool:
+        """Método protegido para verificação interna."""
+        return self.__password_hash == self._hash_password(password)
+    
+    # Método privado
+    def __hash_password(self, password: str) -> str:
+        """Método privado - não deve ser acessado externamente."""
+        import hashlib
+        return hashlib.sha256(password.encode()).hexdigest()
+    
+    # Property para acesso controlado
+    @property
+    def email(self) -> Optional[str]:
+        """Acesso público ao email protegido."""
+        return self._email
+    
+    @email.setter
+    def email(self, value: str) -> None:
+        """Setter com validação."""
+        if "@" not in value:
+            raise ValueError("Email inválido")
+        self._email = value.lower()
+
+
+class Repository:
+    """Repositório com membros protegidos."""
+    
+    def __init__(self, connection):
+        self._connection = connection  # Protegido
+        self._cache = {}  # Protegido
+    
+    def get(self, key: str) -> Any:
+        """Método público."""
+        if key in self._cache:
+            return self._cache[key]
+        return self._fetch_from_db(key)
+    
+    def _fetch_from_db(self, key: str) -> Any:
+        """Método protegido - uso interno."""
+        pass
+
+
+# ❌ Incorreto - Não seguir convenções de privacidade
+
+class BadUser:
+    def __init__(self, password: str):
+        # Senha armazenada como pública!
+        self.password = password  # ❌ Nunca expor senha!
+        
+        # Underscores inconsistentes
+        self._public_method_name = "value"  # ❌ Se é público, não use _
+        self.__also_public = "value"  # ❌ Confuso
+
+
+    def publicMethod(self):  # ❌ Naming inconsistente
+        pass
+```
+
+---
+
+## 📊 **Type Hints e Anotações**
+
+### 3.1. Function Type Annotations
+
+```python
+# ✅ Correto - Type hints completos e claros
+
+from typing import Any, Optional, Union
+from collections.abc import Callable, Sequence
+
+
+def add_numbers(a: int, b: int) -> int:
+    """Soma dois números inteiros."""
+    return a + b
+
+
+def get_user(user_id: str) -> Optional[User]:
+    """
+    Busca usuário pelo ID.
+    
+    Args:
+        user_id: ID do usuário
+        
+    Returns:
+        User se encontrado, None caso contrário
+    """
+    pass
+
+
+def process_items(
+    items: list[dict[str, Any]],
+    callback: Callable[[dict], bool],
+    max_workers: int = 4,
+) -> list[dict[str, Any]]:
+    """
+    Processa itens com callback.
+    
+    Args:
+        items: Lista de itens para processar
+        callback: Função de processamento
+        max_workers: Número de workers paralelos
+        
+    Returns:
+        Lista de itens processados
+    """
+    pass
+
+
+def format_price(
+    amount: float,
+    currency: str = "USD",
+    decimal_places: int = 2,
+) -> str:
+    """Formata valor monetário."""
+    return f"{currency} {amount:.{decimal_places}f}"
+
+
+# Union types para múltiplas possibilidades
+def parse_value(value: str | int | float) -> float:
+    """Converte valor para float."""
+    return float(value)
+
+
+# Async functions
+async def fetch_data(url: str, timeout: int = 30) -> dict[str, Any]:
+    """Busca dados de URL de forma assíncrona."""
+    pass
+
+
+# Funções que não retornam nada
+def log_message(message: str, level: str = "INFO") -> None:
+    """Loga mensagem."""
+    print(f"[{level}] {message}")
+
+
+# ❌ Incorreto - Type hints ausentes ou incompletos
+
+def add_numbers(a, b):  # ❌ Sem type hints
+    return a + b
+
+
+def get_user(user_id):  # ❌ Sem type hints
+    pass
+
+
+def process_items(items: list, callback) -> list:  # ❌ Tipos genéricos demais
+    pass
+
+
+def ambiguous_function(data) -> Any:  # ❌ Any genérico demais sem justificativa
+    pass
+```
+
+---
+
+### 3.2. Class Type Annotations
+
+```python
+# ✅ Correto - Atributos com type hints
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import ClassVar, Optional
+
+
+class User:
+    """Usuário do sistema com type hints."""
+    
+    # Class variable
+    _instances: ClassVar[int] = 0
+    
+    # Instance variables com type hints
+    username: str
+    email: str
+    created_at: datetime
+    is_active: bool
+    _password_hash: str
+    
+    def __init__(
+        self,
+        username: str,
+        email: str,
+        password: str,
+    ):
+        self.username = username
+        self.email = email
+        self.created_at = datetime.utcnow()
+        self.is_active = True
+        self._password_hash = self._hash_password(password)
+        User._instances += 1
+    
+    def _hash_password(self, password: str) -> str:
+        """Hash de senha."""
+        pass
+
+
+# Usando dataclasses (recomendado para data containers)
+@dataclass
+class Product:
+    """Produto do catálogo."""
+    
+    id: str
+    name: str
+    price: float
+    description: Optional[str] = None
+    in_stock: bool = True
+    tags: list[str] = None
+    
+    def __post_init__(self) -> None:
+        """Inicialização pós-dataclass."""
+        if self.tags is None:
+            self.tags = []
+
+
+# Pydantic models (para validação)
+from pydantic import BaseModel, Field, field_validator
+
+
+class UserCreate(BaseModel):
+    """Schema para criação de usuário."""
+    
+    username: str = Field(min_length=3, max_length=50)
+    email: str = Field(pattern=r"^[\w\.-]+@[\w\.-]+\.\w+$")
+    password: str = Field(min_length=8)
+    full_name: str
+    age: Optional[int] = Field(default=None, ge=18, le=120)
+    
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, v: str) -> str:
+        """Valida username."""
+        if not v.isalnum():
+            raise ValueError("Username deve ser alfanumérico")
+        return v.lower()
+
+
+# ❌ Incorreto - Atributos sem tipo
+
+class BadUser:
+    def __init__(self, username, email):  # ❌ Sem type hints nos parâmetros
+        self.username = username  # ❌ Tipo não especificado
+        self.email = email  # ❌ Tipo não especificado
+        self.data = {}  # ❌ dict genérico, deveria especificar dict[str, Any]
+```
+
+---
+
+### 3.3. Generic Types e Advanced Annotations
+
+```python
+# ✅ Correto - Generics e types avançados
+
+from typing import (
+    Any,
+    Callable,
+    Generic,
+    Optional,
+    Protocol,
+    TypeVar,
+    Union,
+    overload,
+)
+from collections.abc import Awaitable, Iterator
+
+
+# Type variables para generics
+T = TypeVar("T")
+K = TypeVar("K")
+V = TypeVar("V")
+
+
+# Classe genérica
+class Repository(Generic[T]):
+    """Repositório genérico para qualquer tipo."""
+    
+    def __init__(self) -> None:
+        self._items: dict[str, T] = {}
+    
+    def add(self, key: str, item: T) -> None:
+        """Adiciona item ao repositório."""
+        self._items[key] = item
+    
+    def get(self, key: str) -> Optional[T]:
+        """Busca item por chave."""
+        return self._items.get(key)
+    
+    def list_all(self) -> list[T]:
+        """Lista todos os itens."""
+        return list(self._items.values())
+
+
+# Uso do repositório genérico
+user_repo: Repository[User] = Repository()
+product_repo: Repository[Product] = Repository()
+
+
+# Protocol para duck typing
+class Drawable(Protocol):
+    """Protocol para objetos desenháveis."""
+    
+    def draw(self) -> None:
+        """Desenha o objeto."""
+        ...
+
+
+def render(obj: Drawable) -> None:
+    """Renderiza qualquer objeto desenhável."""
+    obj.draw()
+
+
+# Overload para diferentes assinaturas
+@overload
+def process(data: str) -> str: ...
+
+@overload
+def process(data: int) -> int: ...
+
+@overload
+def process(data: list[Any]) -> list[Any]: ...
+
+def process(data: str | int | list[Any]) -> str | int | list[Any]:
+    """Processa diferentes tipos de dados."""
+    if isinstance(data, str):
+        return data.upper()
+    elif isinstance(data, int):
+        return data * 2
+    else:
+        return [process(item) for item in data]
+
+
+# Callable com tipos específicos
+def retry(
+    func: Callable[..., T],
+    max_attempts: int = 3,
+) -> Callable[..., T]:
+    """Decorator para retry de função."""
+    def wrapper(*args: Any, **kwargs: Any) -> T:
+        for attempt in range(max_attempts):
+            try:
+                return func(*args, **kwargs)
+            except Exception:
+                if attempt == max_attempts - 1:
+                    raise
+        raise RuntimeError("Unreachable")
+    return wrapper
+
+
+# Async types
+async def fetch_users() -> list[User]:
+    """Busca usuários assincronamente."""
+    pass
+
+
+def get_users_async() -> Awaitable[list[User]]:
+    """Retorna awaitable de usuários."""
+    return fetch_users()
+
+
+# Iterator types
+def fibonacci(n: int) -> Iterator[int]:
+    """Gera sequência de Fibonacci."""
+    a, b = 0, 1
+    for _ in range(n):
+        yield a
+        a, b = b, a + b
+
+
+# Type aliases para clareza
+UserId = str
+Email = str
+Timestamp = int
+
+UserDict = dict[str, Any]
+Config = dict[str, str | int | bool]
+
+
+def get_user_email(user_id: UserId) -> Email:
+    """Busca email do usuário."""
+    pass
+```
+
+---
+
+## 🏗️ **Estrutura de Classes e Funções**
+
+### 4.1. Class Organization
+
+```python
+# ✅ Correto - Organização clara de classe
+
+from abc import ABC, abstractmethod
+from datetime import datetime
+from typing import ClassVar, Optional
+
+
+class BaseService(ABC):
+    """
+    Classe base abstrata para serviços.
+    
+    Atributos de classe devem vir primeiro, seguidos de métodos
+    na ordem: __init__, __str__/__repr__, métodos públicos,
+    métodos protegidos, métodos privados, properties, métodos estáticos.
+    """
+    
+    # 1. Constantes de classe
+    VERSION: ClassVar[str] = "1.0.0"
+    MAX_RETRIES: ClassVar[int] = 3
+    
+    # 2. Variáveis de classe
+    _instances: ClassVar[int] = 0
+    
+    # 3. __init__
+    def __init__(self, name: str, config: dict[str, Any]) -> None:
+        """
+        Inicializa o serviço.
+        
+        Args:
+            name: Nome do serviço
+            config: Configurações do serviço
+        """
+        self.name = name
+        self.config = config
+        self.created_at = datetime.utcnow()
+        self._is_initialized = False
+        self._cache: dict[str, Any] = {}
+        BaseService._instances += 1
+    
+    # 4. __str__ e __repr__
+    def __repr__(self) -> str:
+        """Representação do objeto para debugging."""
+        return f"{self.__class__.__name__}(name={self.name!r})"
+    
+    def __str__(self) -> str:
+        """Representação legível do objeto."""
+        return f"{self.name} Service"
+    
+    # 5. Métodos públicos abstratos
+    @abstractmethod
+    def initialize(self) -> None:
+        """Inicializa recursos do serviço."""
+        pass
+    
+    @abstractmethod
+    def process(self, data: Any) -> Any:
+        """Processa dados."""
+        pass
+    
+    # 6. Métodos públicos concretos
+    def reset(self) -> None:
+        """Reseta estado do serviço."""
+        self._cache.clear()
+        self._is_initialized = False
+    
+    def get_stats(self) -> dict[str, Any]:
+        """Retorna estatísticas do serviço."""
+        return {
+            "name": self.name,
+            "created_at": self.created_at.isoformat(),
+            "is_initialized": self._is_initialized,
+            "cache_size": len(self._cache),
+        }
+    
+    # 7. Métodos protegidos (para uso por subclasses)
+    def _validate_config(self) -> bool:
+        """Valida configuração do serviço."""
+        return bool(self.config)
+    
+    def _get_from_cache(self, key: str) -> Optional[Any]:
+        """Busca valor do cache."""
+        return self._cache.get(key)
+    
+    def _set_in_cache(self, key: str, value: Any) -> None:
+        """Armazena valor no cache."""
+        self._cache[key] = value
+    
+    # 8. Métodos privados
+    def __internal_cleanup(self) -> None:
+        """Limpeza interna (name mangling)."""
+        pass
+    
+    # 9. Properties
+    @property
+    def is_initialized(self) -> bool:
+        """Indica se o serviço está inicializado."""
+        return self._is_initialized
+    
+    @property
+    def instance_count(self) -> int:
+        """Número de instâncias criadas."""
+        return BaseService._instances
+    
+    # 10. Class methods
+    @classmethod
+    def from_config_file(cls, filepath: str) -> "BaseService":
+        """Cria instância a partir de arquivo de configuração."""
+        import json
+        with open(filepath) as f:
+            config = json.load(f)
+        return cls(name=config["name"], config=config)
+    
+    # 11. Static methods
+    @staticmethod
+    def validate_name(name: str) -> bool:
+        """Valida nome do serviço."""
+        return len(name) > 0 and name.isidentifier()
+    
+    # 12. Context manager methods (se aplicável)
+    def __enter__(self) -> "BaseService":
+        """Entrada de context manager."""
+        self.initialize()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Saída de context manager."""
+        self.reset()
+
+
+# Exemplo de subclasse
+class UserService(BaseService):
+    """Serviço de gerenciamento de usuários."""
+    
+    def initialize(self) -> None:
+        """Inicializa serviço de usuários."""
+        if not self._validate_config():
+            raise ValueError("Configuração inválida")
+        self._is_initialized = True
+    
+    def process(self, data: dict[str, Any]) -> User:
+        """Processa dados de usuário."""
+        # Implementação específica
+        pass
+```
+
+---
+
+### 4.2. Function Organization and Documentation
+
+```python
+# ✅ Correto - Função bem documentada e estruturada
+
+from typing import Optional
+
+
+def calculate_discount(
+    original_price: float,
+    discount_percentage: float,
+    min_price: Optional[float] = None,
+    max_discount: Optional[float] = None,
+) -> float:
+    """
+    Calcula preço com desconto aplicado.
+    
+    Aplica desconto percentual ao preço original, respeitando limites
+    mínimos e máximos quando especificados.
+    
+    Args:
+        original_price: Preço original do produto (deve ser > 0)
+        discount_percentage: Percentual de desconto (0-100)
+        min_price: Preço mínimo permitido após desconto (opcional)
+        max_discount: Desconto máximo em valor absoluto (opcional)
+    
+    Returns:
+        Preço final após aplicação do desconto
+    
+    Raises:
+        ValueError: Se preço original <= 0 ou desconto fora de 0-100
+    
+    Examples:
+        >>> calculate_discount(100.0, 10.0)
+        90.0
+        >>> calculate_discount(100.0, 50.0, min_price=60.0)
+        60.0
+        >>> calculate_discount(100.0, 80.0, max_discount=50.0)
+        50.0
+    """
+    # 1. Validação de entrada
+    if original_price <= 0:
+        raise ValueError("Preço original deve ser maior que zero")
+    
+    if not 0 <= discount_percentage <= 100:
+        raise ValueError("Desconto deve estar entre 0 e 100")
+    
+    # 2. Cálculo principal
+    discount_amount = original_price * (discount_percentage / 100)
+    
+    # 3. Aplicar limite máximo de desconto
+    if max_discount is not None:
+        discount_amount = min(discount_amount, max_discount)
+    
+    # 4. Calcular preço final
+    final_price = original_price - discount_amount
+    
+    # 5. Aplicar preço mínimo
+    if min_price is not None:
+        final_price = max(final_price, min_price)
+    
+    # 6. Retornar resultado
+    return round(final_price, 2)
+
+
+async def fetch_user_data(
+    user_id: str,
+    include_posts: bool = False,
+    include_followers: bool = False,
+) -> dict[str, Any]:
+    """
+    Busca dados do usuário de forma assíncrona.
+    
+    Args:
+        user_id: ID único do usuário
+        include_posts: Se True, inclui posts do usuário
+        include_followers: Se True, inclui lista de seguidores
+    
+    Returns:
+        Dicionário com dados do usuário
+    
+    Raises:
+        UserNotFoundError: Se usuário não existe
+        DatabaseError: Se houver erro na conexão com BD
+    """
+    # Implementação assíncrona
+    pass
+
+
+# ❌ Incorreto - Função mal documentada e estruturada
+
+def calc(p, d, m=None):  # ❌ Nomes vagos, sem type hints
+    # ❌ Sem docstring
+    if p <= 0:  # ❌ Sem contexto
+        raise ValueError("invalid")
+    x = p * d / 100  # ❌ Nome de variável vago
+    if m:
+        x = min(x, m)
+    return p - x  # ❌ Sem comentários sobre lógica
+
+
+def bad_function(data):  # ❌ Muitas responsabilidades
+    # Valida
+    if not data:
+        return None
+    # Processa
+    result = []
+    for item in data:
+        if item > 0:
+            result.append(item * 2)
+    # Salva no banco
+    save_to_db(result)
+    # Envia email
+    send_email("done")
+    # Retorna
+    return result
+
+
+# ❌ Incorreto - Função muito longa (deve ser quebrada)
+def giant_function(param1, param2, param3, param4):
+    # ... 200 linhas de código ...
+    # Função deve ter no máximo 50-75 linhas
+    # Quebrar em funções menores!
+    pass
+```
+
+---
+
+## 🐍 **Python Idioms and Best Practices**
+
+### 5.1. Pythonic Code Patterns
+
+```python
+# ✅ Correto - List comprehensions e iterators pythônicos
+
+# List comprehension
+squares = [x**2 for x in range(10)]
+even_squares = [x**2 for x in range(10) if x % 2 == 0]
+
+# Dict comprehension
+word_lengths = {word: len(word) for word in ["hello", "world", "python"]}
+
+# Set comprehension
+unique_lengths = {len(word) for word in ["hello", "world", "hi"]}
+
+# Generator expression (economia de memória)
+sum_of_squares = sum(x**2 for x in range(1000000))
+
+# Enumerate ao invés de range(len())
+items = ["a", "b", "c"]
+for index, value in enumerate(items):
+    print(f"{index}: {value}")
+
+# Zip para iterar sobre múltiplas listas
+names = ["Alice", "Bob", "Charlie"]
+ages = [25, 30, 35]
+for name, age in zip(names, ages):
+    print(f"{name} is {age} years old")
+
+# Unpacking
+first, *middle, last = [1, 2, 3, 4, 5]
+# first=1, middle=[2,3,4], last=5
+
+# Dictionary unpacking
+defaults = {"timeout": 30, "retry": 3}
+config = {**defaults, "url": "example.com", "timeout": 60}
+
+# Walrus operator (:=) para assignment expressions
+if (match := pattern.search(text)) is not None:
+    print(match.group())
+
+# Any e all para verificações
+numbers = [1, 2, 3, 4, 5]
+has_even = any(x % 2 == 0 for x in numbers)
+all_positive = all(x > 0 for x in numbers)
+
+# Default dict para evitar verificações
+from collections import defaultdict
+
+word_count: defaultdict[str, int] = defaultdict(int)
+for word in text.split():
+    word_count[word] += 1
+
+# Counter para contagens
+from collections import Counter
+
+letter_freq = Counter("hello world")
+# Counter({'l': 3, 'o': 2, ...})
+
+# NamedTuple para estruturas simples
+from typing import NamedTuple
+
+class Point(NamedTuple):
+    x: float
+    y: float
+
+p = Point(1.0, 2.0)
+print(p.x, p.y)
+
+
+# ❌ Incorreto - Padrões não pythônicos
+
+# ❌ Loop com range(len())
+items = ["a", "b", "c"]
+for i in range(len(items)):
+    print(f"{i}: {items[i]}")
+
+# ❌ Loop construindo lista manualmente
+squares = []
+for x in range(10):
+    squares.append(x**2)
+
+# ❌ Verificação de key em dict antes de usar
+if "key" in my_dict:
+    value = my_dict["key"]
+else:
+    value = default
+# Use: value = my_dict.get("key", default)
+
+# ❌ Comparações desnecessárias com True/False
+if condition == True:  # Use: if condition:
+    pass
+
+if condition == False:  # Use: if not condition:
+    pass
+
+# ❌ Concatenação de strings em loop
+result = ""
+for item in items:
+    result += str(item)
+# Use: result = "".join(str(item) for item in items)
+
+# ❌ Uso de flag em loop
+found = False
+for item in items:
+    if item == target:
+        found = True
+        break
+# Use: found = target in items
+```
+
+---
+
+### 5.2. Exception Handling
+
+```python
+# ✅ Correto - Exception handling específico e informativo
+
+from typing import Optional
+
+
+def divide_numbers(a: float, b: float) -> float:
+    """
+    Divide dois números com tratamento de erros.
+    
+    Args:
+        a: Numerador
+        b: Denominador
+    
+    Returns:
+        Resultado da divisão
+    
+    Raises:
+        ValueError: Se denominador for zero
+    """
+    if b == 0:
+        raise ValueError("Denominador não pode ser zero")
+    return a / b
+
+
+def read_config_file(filepath: str) -> dict[str, Any]:
+    """
+    Lê arquivo de configuração com tratamento robusto de erros.
+    
+    Args:
+        filepath: Caminho do arquivo
+    
+    Returns:
+        Dicionário de configuração
+    
+    Raises:
+        FileNotFoundError: Se arquivo não existe
+        JSONDecodeError: Se arquivo JSON é inválido
+        PermissionError: Se sem permissão de leitura
+    """
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        return config
+    
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Arquivo de configuração não encontrado: {filepath}")
+    
+    except json.JSONDecodeError as e:
+        raise json.JSONDecodeError(
+            f"Arquivo de configuração inválido: {e.msg}",
+            e.doc,
+            e.pos,
+        )
+    
+    except PermissionError:
+        raise PermissionError(f"Sem permissão para ler arquivo: {filepath}")
+
+
+# Múltiplas exceções
+def process_user_input(data: str) -> int:
+    """Processa input do usuário."""
+    try:
+        value = int(data)
+        result = 100 / value
+        return result
+    
+    except ValueError:
+        raise ValueError(f"Input inválido: '{data}' não é um número")
+    
+    except ZeroDivisionError:
+        raise ZeroDivisionError("Valor não pode ser zero")
+
+
+# Exception chaining com 'from'
+def fetch_user(user_id: str) -> User:
+    """Busca usuário com exception chaining."""
+    try:
+        response = api_client.get(f"/users/{user_id}")
+        return User.parse(response)
+    
+    except APIError as e:
+        raise UserNotFoundError(f"Erro ao buscar usuário {user_id}") from e
+
+
+# Finally para cleanup
+def process_file(filepath: str) -> None:
+    """Processa arquivo com cleanup garantido."""
+    file_handle = None
+    try:
+        file_handle = open(filepath, "r")
+        data = file_handle.read()
+        process_data(data)
+    
+    except IOError as e:
+        logger.error(f"Erro ao processar arquivo: {e}")
+        raise
+    
+    finally:
+        if file_handle:
+            file_handle.close()
+
+
+# Custom exceptions
+class ValidationError(Exception):
+    """Erro de validação customizado."""
+    
+    def __init__(self, field: str, message: str):
+        self.field = field
+        self.message = message
+        super().__init__(f"Validação falhou em '{field}': {message}")
+
+
+def validate_email(email: str) -> None:
+    """Valida email."""
+    if "@" not in email:
+        raise ValidationError("email", "Formato de email inválido")
+
+
+# ❌ Incorreto - Exception handling genérico
+
+def bad_function():
+    try:
+        # Código complexo
+        pass
+    except:  # ❌ Nunca use except bare!
+        pass
+
+def another_bad_function():
+    try:
+        result = risky_operation()
+    except Exception:  # ❌ Muito genérico
+        return None  # ❌ Suprime erro silenciosamente
+
+def worse_function():
+    try:
+        dangerous_code()
+    except Exception as e:
+        print("Erro!")  # ❌ Apenas print, não trata
+        # ❌ Não re-raise, não loga adequadamente
+```
+
+---
+
+### 5.3. Resource Management
+
+```python
+# ✅ Correto - Context managers e resource cleanup
+
+# Context manager para arquivo
+def process_file(filepath: str) -> list[str]:
+    """Processa arquivo usando context manager."""
+    with open(filepath, "r", encoding="utf-8") as file:
+        lines = file.readlines()
+    # Arquivo automaticamente fechado aqui
+    return [line.strip() for line in lines]
+
+
+# Múltiplos context managers
+def copy_file(source: str, dest: str) -> None:
+    """Copia arquivo de source para dest."""
+    with open(source, "r") as src, open(dest, "w") as dst:
+        dst.write(src.read())
+
+
+# Custom context manager (classe)
+class DatabaseConnection:
+    """Context manager para conexão com banco."""
+    
+    def __init__(self, connection_string: str):
+        self.connection_string = connection_string
+        self.connection = None
+    
+    def __enter__(self) -> "DatabaseConnection":
+        """Abre conexão ao entrar no contexto."""
+        self.connection = create_connection(self.connection_string)
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Fecha conexão ao sair do contexto."""
+        if self.connection:
+            self.connection.close()
+    
+    def execute(self, query: str) -> Any:
+        """Executa query."""
+        return self.connection.execute(query)
+
+
+# Uso
+with DatabaseConnection("postgres://localhost") as db:
+    result = db.execute("SELECT * FROM users")
+
+
+# Custom context manager (generator)
+from contextlib import contextmanager
+from typing import Generator
+
+
+@contextmanager
+def temporary_file(filename: str) -> Generator[str, None, None]:
+    """Context manager para arquivo temporário."""
+    # Setup
+    filepath = f"/tmp/{filename}"
+    with open(filepath, "w") as f:
+        f.write("")
+    
+    try:
+        # Yield resource
+        yield filepath
+    finally:
+        # Cleanup
+        import os
+        if os.path.exists(filepath):
+            os.remove(filepath)
+
+
+# Uso
+with temporary_file("temp.txt") as filepath:
+    with open(filepath, "w") as f:
+        f.write("temporary data")
+
+
+# ✅ Correto - Async context managers
+
+import asyncio
+from typing import AsyncGenerator
+
+
+class AsyncDatabaseConnection:
+    """Async context manager para conexão com banco."""
+    
+    def __init__(self, connection_string: str):
+        self.connection_string = connection_string
+        self.connection = None
+    
+    async def __aenter__(self) -> "AsyncDatabaseConnection":
+        """Abre conexão assincronamente."""
+        self.connection = await create_async_connection(
+            self.connection_string
+        )
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Fecha conexão assincronamente."""
+        if self.connection:
+            await self.connection.close()
+    
+    async def execute(self, query: str) -> Any:
+        """Executa query assincronamente."""
+        return await self.connection.execute(query)
+
+
+# Uso
+async def get_users() -> list[User]:
+    async with AsyncDatabaseConnection("postgres://localhost") as db:
+        result = await db.execute("SELECT * FROM users")
+        return result
+
+
+# Async generator context manager
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def async_timer(name: str) -> AsyncGenerator[None, None]:
+    """Context manager para medir tempo de execução."""
+    import time
+    start = time.time()
+    try:
+        yield
+    finally:
+        elapsed = time.time() - start
+        print(f"{name} took {elapsed:.2f} seconds")
+
+
+# Uso
+async def process_data():
+    async with async_timer("Data Processing"):
+        await fetch_data()
+        await transform_data()
+        await save_data()
+
+
+# ❌ Incorreto - Não usar context managers
+
+# ❌ Esquece de fechar arquivo
+def bad_file_handler(filepath: str):
+    file = open(filepath, "r")
+    data = file.read()
+    # ❌ Nunca fecha o arquivo!
+    return data
+
+
+# ❌ Try/finally manual quando context manager seria melhor
+def manual_cleanup(filepath: str):
+    file = open(filepath, "r")
+    try:
+        data = file.read()
+    finally:
+        file.close()
+    # Use 'with' ao invés disso!
+```
+
+---
+
+## ⚡ **Performance and Optimization**
+
+### 6.1. Estruturas de Dados Eficientes
+
+```python
+# ✅ Correto - Estruturas de dados eficientes
+
+from collections import deque, Counter, defaultdict
+from typing import Any
+
+
+# Use set para verificações de pertinência (O(1) vs O(n))
+allowed_users = {"alice", "bob", "charlie"}
+if username in allowed_users:  # O(1)
+    pass
+
+
+# Use deque para operações em ambas extremidades
+queue: deque[str] = deque()
+queue.append("item1")  # O(1)
+queue.appendleft("item0")  # O(1)
+queue.pop()  # O(1)
+queue.popleft()  # O(1)
+
+
+# Use Counter para contagens
+from collections import Counter
+
+words = ["apple", "banana", "apple", "cherry", "banana", "apple"]
+word_count = Counter(words)
+most_common = word_count.most_common(2)  # [('apple', 3), ('banana', 2)]
+
+
+# Use defaultdict para evitar verificações
+from collections import defaultdict
+
+# Agrupar itens por categoria
+items_by_category: defaultdict[str, list] = defaultdict(list)
+for item in items:
+    items_by_category[item.category].append(item)
+
+
+# Use dict.get() com default ao invés de verificar key
+value = my_dict.get("key", default_value)  # Ao invés de if "key" in my_dict
+
+
+# Use tuple para dados imutáveis (mais eficiente que list)
+coordinates = (10.5, 20.3)  # Imutável, mais rápido
+
+
+# Use frozenset para sets imutáveis
+immutable_set = frozenset([1, 2, 3, 4, 5])
+
+
+# Slice ao invés de loop para copiar
+original = [1, 2, 3, 4, 5]
+copy = original[:]  # Mais rápido que list(original)
+
+
+# Use bisect para inserção ordenada (lista já ordenada)
+import bisect
+
+sorted_list = [1, 3, 5, 7, 9]
+bisect.insort(sorted_list, 6)  # [1, 3, 5, 6, 7, 9]
+
+
+# ❌ Incorreto - Estruturas de dados ineficientes
+
+# ❌ Lista para verificações de pertinência (O(n))
+allowed_users_list = ["alice", "bob", "charlie"]
+if username in allowed_users_list:  # Lento!
+    pass
+
+
+# ❌ Lista para operações em ambas extremidades
+queue_list = []
+queue_list.insert(0, "item")  # O(n) - muito lento!
+
+
+# ❌ Loop manual para contar
+word_count = {}
+for word in words:
+    if word in word_count:
+        word_count[word] += 1
+    else:
+        word_count[word] = 1
+# Use Counter ao invés disso!
+
+
+# ❌ Verificações desnecessárias com dict
+if "key" in my_dict:
+    value = my_dict["key"]
+else:
+    value = default_value
+# Use dict.get() ao invés disso!
+```
+
+---
+
+### 6.2. Memory and CPU Optimization
+
+```python
+# ✅ Correto - Generator expressions para economia de memória
+
+# Generator ao invés de lista (lazy evaluation)
+def read_large_file(filepath: str) -> Generator[str, None, None]:
+    """Lê arquivo grande linha por linha."""
+    with open(filepath, "r") as file:
+        for line in file:
+            yield line.strip()
+
+
+# Uso
+for line in read_large_file("huge_file.txt"):
+    process_line(line)  # Processa uma linha por vez
+
+
+# Generator expression ao invés de list comprehension
+# Memória: O(1) vs O(n)
+sum_of_squares = sum(x**2 for x in range(1000000))  # Generator
+# Ao invés de: sum([x**2 for x in range(1000000)])  # Lista
+
+
+# Use itertools para operações eficientes
+from itertools import islice, chain, groupby
+
+
+# islice para pegar primeiros N elementos sem carregar tudo
+first_10 = list(islice(read_large_file("file.txt"), 10))
+
+
+# chain para concatenar iterators sem criar lista intermediária
+combined = chain(iterator1, iterator2, iterator3)
+
+
+# groupby para agrupar elementos consecutivos
+data = [("A", 1), ("A", 2), ("B", 3), ("B", 4), ("A", 5)]
+for key, group in groupby(data, key=lambda x: x[0]):
+    print(f"{key}: {list(group)}")
+
+
+# __slots__ para economizar memória em classes
+class Point:
+    """Classe otimizada com __slots__."""
+    __slots__ = ("x", "y")
+    
+    def __init__(self, x: float, y: float):
+        self.x = x
+        self.y = y
+
+
+# Economiza ~40% de memória por instância!
+
+
+# Use array para números (mais eficiente que list)
+import array
+
+# Array de inteiros (economiza memória)
+numbers = array.array("i", [1, 2, 3, 4, 5])
+
+
+# String joining ao invés de concatenação
+parts = ["hello", "world", "python"]
+result = "".join(parts)  # Eficiente
+
+# Ao invés de:
+# result = ""
+# for part in parts:
+#     result += part  # Ineficiente!
+
+
+# Use set operations para intersecção/união
+set1 = {1, 2, 3, 4, 5}
+set2 = {4, 5, 6, 7, 8}
+
+intersection = set1 & set2  # {4, 5}
+union = set1 | set2  # {1, 2, 3, 4, 5, 6, 7, 8}
+difference = set1 - set2  # {1, 2, 3}
+
+
+# Local variable caching em loops
+def process_items(items: list[dict]) -> list[dict]:
+    """Processa itens com cache de função local."""
+    # Cache função fora do loop
+    process_func = expensive_function
+    
+    results = []
+    for item in items:
+        # Usa cached reference
+        result = process_func(item)
+        results.append(result)
+    
+    return results
+
+
+# functools.lru_cache para memoization
+from functools import lru_cache
+
+
+@lru_cache(maxsize=128)
+def fibonacci(n: int) -> int:
+    """Fibonacci com cache - muito mais rápido!"""
+    if n < 2:
+        return n
+    return fibonacci(n - 1) + fibonacci(n - 2)
+
+
+# ❌ Incorreto - Operações ineficientes
+
+# ❌ Carregar arquivo inteiro na memória
+def bad_read_file(filepath: str) -> list[str]:
+    with open(filepath, "r") as file:
+        lines = file.readlines()  # Carrega TUDO na memória!
+    return lines
+
+
+# ❌ List comprehension quando generator seria melhor
+all_squares = [x**2 for x in range(1000000)]  # Usa muita memória!
+result = sum(all_squares)
+
+
+# ❌ Concatenação de strings em loop
+result = ""
+for i in range(1000):
+    result += str(i)  # Cria nova string a cada iteração!
+
+
+# ❌ Não usar __slots__ quando apropriado
+class Point:
+    def __init__(self, x: float, y: float):
+        self.x = x
+        self.y = y
+        # Cada instância tem __dict__, desperdiçando memória
+
+
+# ❌ Recalcular valores constantemente
+for item in items:
+    # Recalcula a cada iteração!
+    max_value = expensive_calculation()
+    if item > max_value:
+        pass
+
+
+# ❌ Não usar cache para funções recursivas
+def fibonacci(n: int) -> int:
+    """Fibonacci sem cache - extremamente lento!"""
+    if n < 2:
+        return n
+    return fibonacci(n - 1) + fibonacci(n - 2)  # Recalcula tudo!
+```
+
+---
+
+## 🔧 **Configuration and Tools**
+
+### 7.1. Quality Metrics and Standards
+
+```python
+"""
+Métricas de qualidade obrigatórias para todos os projetos Python:
+
+CODE COVERAGE:
+- Mínimo: 80% de cobertura de código
+- Objetivo: 90%+
+- Ferramenta: pytest-cov
+
+Comando:
+    pytest --cov=app --cov-report=html --cov-report=term
+
+COMPLEXITY:
+- McCabe Complexity: < 10 por função
+- Objetivo: < 7
+- Ferramenta: radon, flake8-mccabe
+
+Comando:
+    radon cc app/ -a -nb
+
+DUPLICATION:
+- Duplicação de código: < 3%
+- Ferramenta: radon, jscpd
+
+Comando:
+    radon raw app/ -s
+
+SECURITY:
+- 0 vulnerabilidades high/critical
+- Ferramentas: bandit, safety
+
+Comandos:
+    bandit -r app/
+    safety check
+
+PERFORMANCE:
+- Response time: < 200ms (p95)
+- Memory usage: estável, sem leaks
+- Ferramenta: locust, memory_profiler
+
+TYPE CHECKING:
+- 0 erros de tipo
+- Ferramenta: mypy
+
+Comando:
+    mypy app/ --strict
+
+LINTING:
+- 0 erros de lint
+- Ferramentas: ruff, black, isort
+
+Comandos:
+    ruff check app/
+    black --check app/
+    isort --check app/
+"""
+```
+
+---
+
+### 7.2. Configuração de Ferramentas
+
+```toml
+# pyproject.toml - Configuração centralizada
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 88
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --strict-markers --cov=app --cov-report=term-missing"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["*/tests/*", "*/migrations/*"]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "C",   # flake8-comprehensions
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+]
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]  # imported but unused
+
+[tool.bandit]
+exclude_dirs = ["tests", "venv"]
+skips = ["B101"]  # assert_used
+
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+```
+
+---
+
+### 7.3. Pre-commit Hooks
+
+```yaml
+# .pre-commit-config.yaml
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  - repo: https://github.com/psf/black
+    rev: 23.12.1
+    hooks:
+      - id: black
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+
+  - repo: https://github.com/charliermarsh/ruff-pre-commit
+    rev: v0.1.11
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.8.0
+    hooks:
+      - id: mypy
+        additional_dependencies: [types-all]
+        args: [--strict]
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.6
+    hooks:
+      - id: bandit
+        args: [-c, pyproject.toml]
+```
+
+---
+
+## 📋 **Checklist de Qualidade**
+
+### Antes de Fazer Commit
+
+- [ ] Código formatado com Black
+- [ ] Imports organizados com isort
+- [ ] Type hints completos em todas as funções
+- [ ] Docstrings em todas as funções e classes públicas
+- [ ] Tests escritos para novo código
+- [ ] Coverage >= 80%
+- [ ] Mypy passa sem erros
+- [ ] Ruff/flake8 passa sem erros
+- [ ] Bandit não reporta vulnerabilidades
+- [ ] Complexity < 10 em todas as funções
+- [ ] Variáveis e funções com nomes descritivos
+- [ ] Sem print() ou debug code
+- [ ] Sem código comentado
+- [ ] Tratamento adequado de exceções
+- [ ] Recursos gerenciados com context managers
+
+### Antes de PR
+
+- [ ] Todos os testes passando
+- [ ] Coverage report atualizado
+- [ ] Documentação atualizada
+- [ ] CHANGELOG.md atualizado
+- [ ] Performance aceitável (sem degradação)
+- [ ] Segurança verificada
+- [ ] Code review solicitado
+
+---
+
+**Este guia deve ser seguido rigorosamente em todos os projetos Python da organização.**

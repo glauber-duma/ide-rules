@@ -1,0 +1,921 @@
+---
+Rule: fastapi-validation.mdc
+Description: Diretrizes para implementação de validação robusta com Pydantic em FastAPI, cobrindo modelos, validadores customizados, serialização e tratamento de erros.
+globs: ["**/schemas/**/*.py", "**/models/**/*.py", "**/validators/**/*.py", "**/validation/**/*.py"]
+alwaysApply: false
+tags: ["fastapi", "api", "pydantic", "validators"]
+Author: Glauber Duma
+Created: 2026-01
+---
+
+# FastAPI - Validação com Pydantic
+
+## 1. Objetivo
+
+Estabelecer padrões para validação robusta e completa usando Pydantic, garantindo:
+- **Validação automática** de entrada e saída de dados
+- **Modelos tipados** com documentação automática
+- **Validadores customizados** para regras de negócio
+- **Serialização consistente** entre diferentes contextos
+- **Tratamento adequado** de erros de validação
+
+---
+
+## 2. Estrutura de modelos Pydantic
+
+### 🗂️ **Organização de Schemas**
+
+```
+fastapi_project
+|---src/
+|.   |---api/
+|.        |---schemas/                                   # schemas Pydantic
+|.            |---__init__.py
+|.            |---base.py                               # schemas base reutilizáveis
+|.            |---common.py                             # schemas comuns (paginação, erro, etc...)
+|.            |---user/                                 # Schemas de usuário
+|.        .   |    |---__init__.py
+|.        .   |    |---user_schemas.py                  # CRUD
+|.        .   |    |---auth_schemas.py                  # Autenticação
+|.        .   |    |---profile_schemas.py               # Perfil
+|.            |---product/                              # Schemas de produtos
+|.        .   |    |---__init__.py
+|.        .   |    |---product_schemas.py                  
+|.        .   |    |---category_schemas.py   
+|.            |---validators/                           # Validadores customizados
+|.        .        |---__init__.py
+|.        .        |---decorators.py                  
+|.        .        |---business_validators.py   
+|-- models/                                             # Models de database (SQLAlchemy, etc.)
+|-- core/
+     |-- validation/                                    # Utilitários de validação
+     |      |---__init__.py
+     |      |---decorators.py                           # Decoradores de validação
+     |      |---exceptions.py                           # Exceções customizadas
+     |---types.py                                       # Tipos customizados
+
+```
+
+
+## 🏗️ **Base Models**
+
+```Python
+# src/api/schemas/base.py
+"""
+Schemas base para reutilização
+"""
+from datetime import datetime
+from typing import Optional, Generic, TypeVar, List
+from pydantic import BaseModel, Field, ConfigDict
+
+
+class BaseSchema(BaseModel):
+    """Schema base com configurações padrão."""
+    
+    model_config = ConfigDict(
+        from_attributes=True,  # Permite conversão de ORM models
+        populate_by_name=True,
+        str_strip_whitespace=True,
+        validate_assignment=True,
+    )
+
+
+class TimestampedSchema(BaseSchema):
+    """Schema com timestamps automáticos."""
+    
+    created_at: Optional[datetime] = Field(None, description="Data de criação")
+    updated_at: Optional[datetime] = Field(None, description="Data de atualização")
+ com validações robustas.
+"""
+from datetime import datetime
+from typing import Optional, Literal
+from pydantic import EmailStr, Field, field_validator, model_validator
+from ..base import BaseSchema, IDSchema, TimestampedSchema
+
+
+class UserBase(BaseSchema):
+    """Schema base de usuário."""
+    
+    email: EmailStr = Field(..., description="Email do usuário")
+    full_name: str = Field(..., min_length=2, max_length=100, description="Nome completo")
+    is_active: bool = Field(default=True, description="Usuário ativo")
+    role: Literal["user", "admin", "moderator"] = Field(default="user", description="Papel do usuário")
+
+
+class UserCreate(UserBase):
+    """Schema para criação de usuário."""
+    
+    password: str = Field(..., min_length=8, max_length=100, description="Senha")
+    password_confirm: str = Field(..., description="Confirmação de senha")
+    
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, v: str) -> str:
+        """Valida força da senha."""
+        if not any(c.isupper() for c in v):
+            raise ValueError("Senha deve conter ao menos uma letra maiúscula")
+        if not any(c.islower() for c in v):
+            raise ValueError("Senha deve conter ao menos uma letra minúscula")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Senha deve conter ao menos um número")
+        if not any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in v):
+            raise ValueError("Senha deve conter ao menos um caractere especial")
+        return v
+    
+    @model_validator(mode="after")
+    def validate_passwords_match(self):
+        """Valida se senhas coincidem."""
+        if self.password != self.password_confirm:
+            raise ValueError("Senhas não coincidem")
+        return self
+
+
+class UserUpdate(BaseSchema):
+    """Schema para atualização de usuário."""
+    
+    full_name: Optional[str] = Field(None, min_length=2, max_length=100)
+    is_active: Optional[bool] = None
+    role: Optional[Literal["user", "admin", "moderator"]] = None
+
+
+class UserUpdatePassword(BaseSchema):
+    """Schema para atualização de senha."""
+    
+    current_password: str = Field(..., description="Senha atual")
+    new_password: str = Field(..., min_length=8, max_length=100, description="Nova senha")
+    new_password_confirm: str = Field(..., description="Confirmação da nova senha")
+    
+    @field_validator("new_password")
+    @classmethod
+    def validate_password_strength(cls, v: str) -> str:
+        if not any(c.isupper() for c in v):
+            raise ValueError("Senha deve conter ao menos uma letra maiúscula")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Senha deve conter ao menos um número")
+        return v
+    
+    @model_validator(mode="after")
+    def validate_passwords_match(self):
+        if self.new_password != self.new_password_confirm:
+            raise ValueError("Novas senhas não coincidem")
+        return self
+
+
+class UserRead(IDSchema, TimestampedSchema, UserBase):
+    """Schema para leitura de usuário (sem senha)."""
+    
+    last_login: Optional[datetime] = Field(None, description="Último login")
+ e reutilizáveis.
+"""
+import re
+from typing import Any
+
+
+class PasswordValidator:
+    """Validador de senha com múltiplas regras configuráveis."""
+    
+    def __init__(
+        self,
+        min_length: int = 8,
+        max_length: int = 100,
+        require_uppercase: bool = True,
+        require_lowercase: bool = True,
+        require_digit: bool = True,
+        require_special: bool = True,
+        special_chars: str = "!@#$%^&*()_+-=[]{}|;:,.<>?"
+    ):
+        self.min_length = min_length
+        self.max_length = max_length
+        self.require_uppercase = require_uppercase
+        self.require_lowercase = require_lowercase
+        self.require_digit = require_digit
+        self.require_special = require_special
+        self.special_chars = special_chars
+    
+    def __call__(self, password: str) -> str:
+        """Valida senha segundo as regras configuradas."""
+        if len(password) < self.min_length:
+            raise ValueError(f"Senha deve ter pelo menos {self.min_length} caracteres")
+         para diferentes audiências.
+"""
+from typing import Any, Dict, Set, Optional, Literal
+from pydantic import BaseModel, ConfigDict, model_serializer
+
+
+class ContextAwareSchema(BaseModel):
+    """Schema base com serialização consciente de contexto."""
+    
+    model_config = ConfigDict(from_attributes=True)
+    
+    def model_dump_context(
+        self,
+        context: Literal["public", "private", "admin"] = "public",
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Serializa modelo com base no contexto.
+        
+        Args:
+            context: Contexto da serialização
+            **kwargs: Argumentos adicionais para model_dump
+            
+        Returns:
+            Dicionário com dados serializados
+        """
+        exclude_fields = self._get_excluded_fields(context)
+        return self.model_dump(exclude=exclude_fields, **kwargs)
+    
+    def _get_excluded_fields(self, context: str) -> Set[str]:
+        """Retorna campos a excluir baseado no contexto."""
+        # Override em subclasses
+        return set()
+
+
+class UserContextSchema(ContextAwareSchema):
+    """Exemplo de schema com serialização contextual."""
+    
+    id: int
+    email: str
+    full_name: str
+    is_active: bool
+    role: str
+    internal_notes: Optional[str] = None
+    hashed_password: Optional[str] = None
+    salary: Optional[float] = None
+    
+    def _get_excluded_fields(self, context: str) -> Set[str]:
+        """Define campos excluídos por contexto."""
+        if context == "public":
+            return {"internal_notes", "hashed_password", "salary", "role"}
+        elif context == "private":
+            return {"hashed_password", "salary"}
+        elif context == "admin":
+            return {"hashed_password"}
+        return set()
+
+
+# Exemplo com model_serializer customizado
+class ProductSchema(BaseModel):
+    """Produto com serialização condicional de preço."""
+    
+    id: int
+    name: str
+    description: str
+    price: float
+    cost: float
+    internal_code: str
+    
+    @model_serializer(mode="wrap")
+    def serialize_model(self, serializer, info):
+        """Customiza serialização baseado em contexto."""
+        data = serializer(self)
+        core/validation/async_validators.py
+"""
+Validadores assíncronos usando FastAPI Dependencies.
+Pydantic não suporta validadores async nativamente, use dependencies.
+"""
+from typing import Optional, Callable
+from fastapi import Depends, HTTPException, status
+
+
+class AsyncValidator:
+    """Classe base para validadores assíncronos."""
+    
+    def __init__(self, error_message: str, status_code: int = status.HTTP_400_BAD_REQUEST):
+        self.error_message = error_message
+        self.status_code = status_code
+    
+    async def __call__(self, value: any, db=None) -> any:
+        """Override este método em subclasses."""
+        raise NotImplementedError()
+
+
+class UniqueEmailValidator(AsyncValidator):
+    """Valida se email é único no banco de dados."""
+    
+    def __init__(self):
+        super().__init__("Email já cadastrado")
+    
+    async def __call__(self, email: str, db) -> str:
+        """Verifica unicidade do email."""
+        # Exemplo com SQLAlchemy
+       completos para validação Pydantic.
+"""
+import pytest
+from pydantic import ValidationError
+from src.api.schemas.user.user_schemas import UserCreate, UserUpdate, UserUpdatePassword
+from src.api.schemas.validators.password_validator import (
+    PasswordValidator,
+    validate_cpf,
+    validate_phone_br,
+    validate_url_safe
+)
+
+
+class TestUserCreateValidation:
+    """Testes para criação de usuário."""
+    
+    def test_user_create_valid(self):
+        """Testa criação válida de usuário."""
+        user = UserCreate(
+            email="test@example.com",
+            full_name="Test User",
+            password="Str0ng!Pass",
+            password_confirm="Str0ng!Pass"
+        )separados para cada operação (Create, Read, Update)
+from pydantic import BaseModel, Field
+
+class ProductCreate(BaseModel):
+    """Schema específico para criação."""
+    name: str = Field(..., min_length=1, max_length=200)
+    price: float = Field(..., gt=0)
+
+class ProductRead(BaseModel):
+    """Schema específico para leitura."""
+    id: int
+    name: str
+    price: float
+    created_at: datetime
+
+class ProductUpdate(BaseModel):
+    """Schema específico para atualização."""
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    price: Optional[float] = Field(None, gt=0)
+
+
+# Valide entrada rigorosamente com Field()
+class PaginationParams(BaseModel):
+    """Parâmetros de paginação validados."""
+    page: int = Field(1, ge=1, description="Número da página")
+    size: int = Field(20, ge=1, le=100, description="Itens por página")
+    sort: Optional[str] = Field(None, regex="^[a-z_]+:(asc|desc)$")
+
+
+# Use Field() para documentação automática e validação
+class Article(BaseModel):
+    title: str = Field(
+        ...,
+        min_length=5,
+        max_length=200,
+        description="Título do artigo",
+        examples=["Meu Primeiro Artigo"]
+    )
+    slug: str = Field(
+        ...,
+        regex="^[a-z0-9-]+$",
+        description="URL amigável",
+        examples=["meu-primeiro-artigo"]
+    )
+
+
+# Implemente validação contextual
+class UserSchema(ContextAwareSchema):
+    id: int
+    email: str
+    salary: Optional[float] = None
+    
+    def _get_excluded_fields(self, context: str) -> Set[str]:
+        if context == "public":
+            return {"salary"}
+        return set()
+
+# Uso
+user = UserSchema(id=1, email="user@example.com", salary=5000)
+public_data = user.model_dump_context(context="public")  # sem salary
+admin_data = user.model_dump_context(context="admin")  # com salary
+
+
+# Use model_validator para validação entre campos
+from pydantic import model_validator
+
+class DateRange(BaseModel):
+    start_date: datetime
+    end_date: datetime
+    
+    @model_validator(mode="after")
+    def validate_date_range(self):
+        if self.end_date <= self.start_date:
+            raise ValueError("Data final deve ser posterior à data inicial")
+        return self
+
+
+# Reutilize validadores em múltiplos schemas
+password_validator = PasswordValidator(min_length=8, require_special=True)
+
+class UserCreate(BaseModel):
+    password: str
+    
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v):
+        return password_validator(v)
+
+class PasswordReset(BaseModel):
+    new_password: str
+    
+    @field_validator("new_password")
+    @classmethod
+    def validate_password(cls, v):
+        return password_validator(v)
+
+
+# Use ConfigDict para configuração consistente
+class BaseSchema(BaseModel):
+    model_config = ConfigDict(
+        from_attributes=True,
+        validate_assignment=True,
+        str_strip_whitespace=True,
+        json_schema_extra={
+            "example": {"id": 1, "name": "Example"}
+        }
+    )
+
+```
+
+### ❌ **DONT`s - Práticas a Evitar**
+
+```Python
+# ❌ Não use um schema para tudo
+class User(BaseModel):
+    id: int
+    email: str
+    password: str  # Expõe senha em leitura!
+    created_at: datetime
+
+# ✅ Separe create, read, update
+class UserCreate(BaseModel):
+    email: str
+    password: str
+
+class UserRead(BaseModel):
+    id: int
+    email: str
+    created_at: datetime  # Sem password
+
+
+# ❌ Não ignore validação de entrada
+@app.post("/items")
+async def create_item(data: dict):  # dict não valida!
+    return data
+
+# ✅ Use schema Pydantic
+@app.post("/items")
+async def create_item(data: ItemCreate):  # Validado automaticamente
+    return data
+
+
+# ❌ Não use valores hardcoded em múltiplos lugares
+class UserCreate(BaseModel):
+    password: str = Field(..., min_length=8, max_length=100)
+
+class PasswordReset(BaseModel):
+    password: str = Field(..., min_length=8, max_length=100)  # Duplicado!
+
+# ✅ Centralize em constantes ou validadores
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_MAX_LENGTH = 100
+
+class UserCreate(BaseModel):
+    password: str = Field(..., min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
+
+
+# ❌ Não exponha campos sensíveis
+class UserRead(BaseModel):
+    id: int
+    email: str
+    password: str  # NUNCA!
+    hashed_password: str  # NUNCA!
+    secret_key: str  # NUNCA!
+
+# ✅ Exclua campos sensíveis
+class UserRead(BaseModel):
+    id: int
+    email: str
+    # Sem campos sensíveis
+
+
+# ❌ Não ignore erros de validação
+try:
+    user = UserCreate(**data)
+except ValidationError:
+    pass  # Silencioso!
+
+# ✅ Trate e retorne erros apropriadamente
+from fastapi import HTTPException
+
+try:
+    user = UserCreate(**data)
+except ValidationError as e:
+    raise HTTPException(
+        status_code=422,
+        detail=e.errors()
+    )
+
+
+# ❌ Não use validação síncrona para operações I/O
+class UserCreate(BaseModel):
+    email: str
+    
+    @field_validator("email")
+    @classmethod
+    def check_unique_email(cls, v):
+        # Bloqueia thread!
+        if db.query(User).filter(User.email == v).first():
+            raise ValueError("Email já existe")
+        return v
+
+# ✅ Use dependencies do FastAPI para validação async
+@app.post("/users")
+async def create_user(
+    data: UserCreate,
+    db: Session = Depends(get_db),
+    _: None = Depends(validate_unique_email)  # Dependency async
+):
+    ...
+
+```
+
+---
+
+Esta regra estabelece padrões sólidos para validação Pydantic em aplicações FastAPI, garantindo código limpo, seguro e manutenível.
+
+class TestPasswordValidator:
+    """Testes para validador de senha."""
+    
+    def test_password_validator_valid(self):
+        """Testa senha válida."""
+        validator = PasswordValidator()
+        result = validator("Str0ng!Password")
+        assert result == "Str0ng!Password"
+    
+    def test_password_validator_too_short(self):
+        """Testa senha muito curta."""
+        validator = PasswordValidator(min_length=10)
+        with pytest.raises(ValueError) as exc_info:
+            validator("Short1!")
+        assert "pelo menos 10 caracteres" in str(exc_info.value)
+    
+    def test_password_validator_no_uppercase(self):
+        """Testa senha sem maiúscula."""
+        validator = PasswordValidator()
+        with pytest.raises(ValueError) as exc_info:
+            validator("alllower1!")
+        assert "maiúscula" in str(exc_info.value)
+    
+    def test_password_validator_custom_config(self):
+        """Testa validador com configuração customizada."""
+        validator = PasswordValidator(
+            min_length=6,
+            require_special=False
+        )
+        result = validator("Simple1")
+        assert result == "Simple1"
+
+
+class TestDomainValidators:
+    """Testes para validadores de domínio."""
+    
+    def test_validate_cpf_valid(self):
+        """Testa CPF válido."""
+        result = validate_cpf("123.456.789-10")
+        assert result == "12345678910"
+    
+    def test_validate_cpf_invalid(self):
+        """Testa CPF inválido."""
+        with pytest.raises(ValueError):
+            validate_cpf("111.111.111-11")
+    
+    def test_validate_phone_valid(self):
+        """Testa telefone válido."""
+        result = validate_phone_br("(11) 98765-4321")
+        assert result == "11987654321"
+    
+    def test_validate_phone_invalid(self):
+        """Testa telefone inválido."""
+        with pytest.raises(ValueError):
+            validate_phone_br("123")
+    
+    def test_validate_url_safe_valid(self):
+        """Testa slug válido."""
+        result = validate_url_safe("my-article-123")
+        assert result == "my-article-123"
+    
+    def test_validate_url_safe_invalid(self):
+        """Testa slug inválido."""
+        with pytest.raises(ValueError):
+            validate_url_safe("My Article!")
+
+
+class TestUserUpdate:
+    """Testes para atualização de usuário."""
+    
+    def test_user_update_partial(self):
+        """Testa atualização parcial."""
+        update = UserUpdate(full_name="New Name")
+        assert update.full_name == "New Name"
+        assert update.is_active is None
+    
+    def test_user_update_empty(self):
+        """Testa atualização vazia."""
+        update = UserUpdate()
+        assert update.model_dump(exclude_unset=True) == {}
+
+
+# Fixtures úteis para testes
+@pytest.fixture
+def valid_user_data():
+    """Fixture com dados válidos de usuário."""
+    return {
+        "email": "test@example.com",
+        "full_name": "Test User",
+        "password": "Str0ng!Pass",
+        "password_confirm": "Str0ng!Pass"
+    }
+
+
+@pytest.fixture
+def password_validator():
+    """Fixture com validador de senha padrão."""
+    return PasswordValidator(
+    
+    def __init__(self, model_class, field_name: str = "id"):
+        self.model_class = model_class
+        self.field_name = field_name
+        super().__init__(f"{model_class.__name__} não encontrado(a)")
+    
+    async def __call__(self, value: any, db) -> any:
+        """Verifica existência da entidade."""
+        from sqlalchemy import select
+        
+        stmt = select(self.model_class).where(
+            getattr(self.model_class, self.field_name) == value
+        )
+        result = await db.execute(stmt)
+        entity = result.scalar_one_or_none()
+        
+        if not entity:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=self.error_message)
+        
+        return value
+
+
+# Exemplo de uso em endpoints
+"""
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from .database import get_db
+from .schemas import UserCreate
+from .validation.async_validators import UniqueEmailValidator
+
+router = APIRouter()
+
+@router.post("/users")
+async def create_user(
+    payload: UserCreate,
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(lambda p=Depends(lambda: payload): 
+        UniqueEmailValidator()(p.email, db))
+):
+    # Email já foi validado como único
+    user = await create_user_in_db(payload, db)
+    return user
+
+
+# Ou usando uma dependency factory
+def validate_unique_email(email: str, db: AsyncSession = Depends(get_db)):
+    validator = UniqueEmailValidator()
+    return await validator(email, db)
+
+@router.post("/users/v2")
+async def create_user_v2(
+    payload: UserCreate,
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(lambda: validate_unique_email(payload.email, db))
+):
+    user = await create_user_in_db(payload, db)
+    return user
+"""
+# Validadores de domínio específico
+def validate_cpf(cpf: str) -> str:
+    """Valida CPF brasileiro."""
+    cpf_clean = re.sub(r"[^0-9]", "", cpf)
+    
+    if len(cpf_clean) != 11:
+        raise ValueError("CPF deve ter 11 dígitos")
+    
+    if cpf_clean == cpf_clean[0] * 11:
+        raise ValueError("CPF inválido")
+    
+    # Validação dos dígitos verificadores (simplificado)
+    return cpf_clean
+
+
+def validate_phone_br(phone: str) -> str:
+    """Valida telefone brasileiro."""
+    phone_clean = re.sub(r"[^0-9]", "", phone)
+    
+    if len(phone_clean) not in (10, 11):
+        raise ValueError("Telefone deve ter 10 ou 11 dígitos (com DDD)")
+    
+    return phone_clean
+
+
+def validate_url_safe(value: str) -> str:
+    """Valida string segura para URL (slug)."""
+    if not re.match(r"^[a-z0-9-]+$", value):
+        raise ValueError("Apenas letras minúsculas, números e hífens são permitidos")
+    
+    if value.startswith("-") or value.endswith("-"):
+        raise ValueError("Não pode iniciar ou terminar com hífen")
+    
+    if "--" in value:
+        raise ValueError("Não pode conter hífens consecutivos")
+    
+    return valuerir reuso via validator centralizado
+        if any(c.isdigit() for c in v) is False:
+            raise ValueError("A senha deve conter ao menos um número")
+        return v
+
+
+class UserRead(IDModel, TimestampedModel):
+    email: EmailStr
+    full_name: Optional[str]
+
+
+class UserUpdate(BaseModel):
+    full_name: Optional[str]
+    password: Optional[str]
+
+    @validator("password")
+    def password_optional_strength(cls, v):
+        if v is None:
+            return v
+        if len(v) < 8:
+            raise ValueError("Senha muito curta")
+        return v
+
+```
+
+## 4. Validadores Customizados
+
+### 🔎 **Validadores especializados**
+
+```Python
+# src/api/schemas/validators/password_validator.py
+"""
+Validadores de senhas robusto
+"""
+import re
+from pydantic import validator
+
+
+def password_rules(password: str):
+    if len(password) < 8:
+        raise ValueError("Senha deve ter pelo menos 8 caracteres")
+    if not re.search(r"[0-9]", password):
+        raise ValueError("Senha deve conter números")
+    if not re.search(r"[A-Z]", password):
+        raise ValueError("Senha deve conter letras maiúsculas")
+    return password
+
+
+# Uso recomendado: importar e aplicar nos schemas
+# @validator('password')
+# def validate_password(cls, v):
+#     return password_rules(v)
+
+```
+
+
+## 5. Serialização Avançada
+
+### 📄 **Context-Aware Serialization**
+
+```Python
+# src/api/schemas/serialization.py
+"""
+Serialização consciente de contexto
+"""
+from pydantic import BaseModel
+from typing import Any, Dict
+
+
+class ContextSerializer(BaseModel):
+    def dict_with_context(self, *, exclude_none=True, context: Dict[str, Any] | None = None):
+        data = self.dict(exclude_none=exclude_none)
+        # exemplo: esconder campos sensíveis para clientes
+        if context and context.get("public"):
+            data.pop("internal_notes", None)
+        return data
+
+```
+
+## 6. Validação Assíncrona
+
+### ⚡️ **Async Validators**
+
+```Python
+# src/api/schemas/async_validators.py
+"""
+Validadores assíncronos: usar dependências do FastAPI para checagens que requerem I/O.
+Pydantic não executa validadores async automaticamente no v1; preferir dependências.
+"""
+from fastapi import Depends, HTTPException
+from starlette import status
+
+
+async def unique_email_validator(email: str, db=Depends(lambda: None)):
+    # exemplo: procurar no DB se email existe (pseudo-código)
+    exists = False
+    # exists = await db.users.exists(email=email)
+    if exists:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email já cadastrado")
+
+# Uso em endpoint:
+# @app.post('/users')
+# async def create_user(payload: UserCreate, _=Depends(lambda: unique_email_validator(payload.email))):
+#     ...
+
+```
+
+## 7. Testes de Validação 
+
+### 🧪 **Testing Strategies**
+
+```Python
+# tests/test_validation.py
+"""
+Testes para validação Pydantic
+"""
+import pytest
+from pydantic import ValidationError
+from src.api.schemas.user.user_schemas import UserCreate
+
+
+def test_user_create_valid():
+    u = UserCreate(email="a@b.com", password="Abc12345")
+    assert u.email == "a@b.com"
+
+
+def test_user_create_invalid_password():
+    with pytest.raises(ValidationError):
+        UserCreate(email="a@b.com", password="short")
+
+```
+
+## 8. Boas práticas
+
+### ✅ **DO`s - Práticas Recomendadas**
+
+```Python
+# Use schemas para cada operação
+class CreateItemSchema(BaseModel):
+    name: str
+
+# Valide entrada rigorosamente
+class FilterParams(BaseModel):
+    limit: int = Field(10, ge=1, le=100)
+
+# Use Field() para documentação e validação
+name: str = Field(..., min_length=1, max_length=200, description="Nome do recurso")
+
+# Implemente validação contextual (serialize com contexto)
+# Use métodos auxiliares para adaptar saída (ex.: dict_with_context)
+
+# Use root_validators para validação entre campos
+from pydantic import root_validator
+
+class Transfer(BaseModel):
+    from_account: int
+    to_account: int
+    amount: float
+
+    @root_validator
+    def check_accounts(cls, values):
+        if values.get('from_account') == values.get('to_account'):
+            raise ValueError('contas devem ser diferentes')
+        return values
+
+```
+
+### ❌ **DONT`s - Práticas a Evitar**
+
+```Python
+# Não use schemas para tudo: separar DTOs, models e entidades
+
+# Não ignore validação de entrada
+# Não usar try/except genérico que esconda ValidationError
+
+# Não use valores de validação hardcode em múltiplos lugares
+# Centralizar regras em utilitários/validators reutilizáveis
+
+# Não esponha campos sensíveis
+# Ex.: nunca retornar `password` ou `secret` em schemas públicos
+
+# Não ignore erros de validação
+# Sempre retornar erros com payload claro e status adequado
+
+```
+
+---
+
+**Esta rule deve ser rigorosamente seguida em todos os projetos FastAPI da organização.**

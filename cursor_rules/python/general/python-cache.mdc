@@ -1,0 +1,694 @@
+---
+Rule: python-cache.mdc
+Description: Diretrizes para implementação estratégica de cache em Python, cobrindo Redis, cache em memória, invalidação e padrões de performance.
+globs: ["**/cache/**/*.py", "**/caching/**/*.py", "**/redis/**/*.py"]
+alwaysApply: false
+tags: ["fastapi", "api", "cache", "redis"]
+Author: Glauber Duma
+Created: 2026-01
+---
+
+# Python - Estratégias de Cache
+
+## 1. Objetivo
+
+Estabelecer padrões para implementação eficaz de cache em aplicações Python, garantindo:
+- **Performance otimizada** com redução de latência
+- **Escalabilidade** com distribuição de cache
+- **Consistência** de dados com invalidação adequada
+- **Flexibilidade** com múltiplas estratégias de cache
+- **Monitoramento** de hit rates e performance
+
+---
+
+## 2. Arquitetura de Cache
+
+### 🗂️ **Estrutura de organização**
+
+```
+fastapi_project
+|---src/
+|.   |---cache/
+|.   |     |---__init__.py
+|.   |     |---interface.py                              # Interface abstrata de cache
+|.   |     |---backends/                                 # Diferentes implementações
+|.   |     |    |---__init__.py
+|.   |     |    |---memory.py                            # Cache em memória
+|.   |     |    |---redis.py                             # Cache Redis
+|.   |     |    |---hybrid.py                            # Cache Híbrido
+|.   |     |    |---null.py                              # Cache nulo (para testes)
+|.   |     |---decorators.py                             # Decoradores de cache
+|.   |     |---keys.py                                   # Geração de chaves
+|.   |     |---serializers.py                            # Serialização de dados  
+|.   |     |---invalidation.py                           # Estratégias de invalidação
+|.   |     |---monitoring.py                             # Métricas de cache
+|.   |---core/
+|.   |.   |---config.py
+|.   |.   |---cache/
+|.   |         |---__init__.py
+|.   |         |---config.py                            # Configuração de cache
+|.   |         |---dependencies.py                      # FastAPI Dependencies
+|.   |         |---middleware.py                        # Middleware de cache
+|.   |---business/
+            |---services/
+                  |---cached_services.py              # Serviços com cache
+
+```
+
+### 🔧 **Cache Configuration**
+
+```Python
+# src/core/cache/config.py
+"""
+Configuração de cache
+"""
+from dataclasses import dataclass
+from typing import Literal
+
+
+@dataclass
+class CacheConfig:
+    """Configuração centralizada de cache."""
+    
+    enabled: bool = True
+    backend: Literal["redis", "memory", "hybrid", "null"] = "redis"
+    default_ttl_seconds: int = 300
+    
+    # Redis
+    redis_url: str = "redis://localhost:6379/0"
+    redis_max_connections: int = 10
+    redis_socket_timeout: int = 5
+    
+    # Memory Cache
+    memory_max_size: int = 1000
+    memory_eviction_policy: Literal["lru", "lfu"] = "lru"
+    
+    # Cache keys
+    namespace: str = "app"
+    key_version: str = "v1"
+    
+    # Monitoring
+    metrics_enabled: bool = True
+    log_cache_hits: bool = False
+
+```
+
+## 3. Interface de Cache
+
+### 🔌 **Cache Interface**
+
+```Python
+# src/cache/interface.py
+"""
+Interface abstrata de Cache
+"""
+from abc import ABC, abstractmethod
+from typing import Any, Optional, List
+
+
+class CacheBackend(ABC):
+    """Interface abstrata para implementações de cache."""
+    
+    @abstractmethod
+    async def get(self, key: str) -> Optional[Any]:
+        """Recupera valor do cache.
+        
+        Args:
+            key: Chave do cache
+            
+        Returns:
+            Valor armazenado ou None se não existir
+        """
+        raise NotImplementedError()
+    
+    @abstractmethod
+    async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+        """Armazena valor no cache.
+        
+        Args:
+            key: Chave do cache
+            value: Valor a ser armazenado
+            ttl: Time-to-live em segundos (None = sem expiração)
+        """
+        raise NotImplementedError()
+    
+    @abstractmethod
+    async def delete(self, key: str) -> None:
+        """Remove valor do cache.
+        
+        Args:
+            key: Chave a ser removida
+        """
+        raise NotImplementedError()
+    
+    @abstractmethod
+    async def delete_pattern(self, pattern: str) -> int:
+        """Remove múltiplas chaves por padrão.
+        
+        Args:
+            pattern: Padrão de chaves (ex: "user:*")
+            
+        Returns:
+            Número de chaves removidas
+        """
+        raise NotImplementedError()
+    
+    @abstractmethod
+    async def exists(self, key: str) -> bool:
+        """Verifica se chave existe.
+        
+        Args:
+            key: Chave a verificar
+            
+        Returns:
+            True se existe, False caso contrário
+        """
+        raise NotImplementedError()
+    
+    @abstractmethod
+    async def ping(self) -> bool:
+        """Verifica conectividade com backend.
+        
+        Returns:
+            True se conectado, False caso contrário
+        """
+        raise NotImplementedError()
+
+```
+
+## 4. Implementação Redis
+
+### 🔴 **Redis Cache Backend**
+
+```Python
+# src/cache/backends/redis.py
+"""
+Implementação de cache utilizando Redis
+"""
+import logging
+from typing import Any, Optional
+from redis.asyncio import Redis, ConnectionPool
+from ..interface import CacheBackend
+from ..serializers import JsonSerializer
+
+logger = logging.getLogger(__name__)
+
+
+class RedisCache(CacheBackend):
+    """Implementação de cache usando Redis."""
+    
+    def __init__(
+        self,
+        redis_url: str,
+        serializer=None,
+        max_connections: int = 10,
+        socket_timeout: int = 5
+    ):
+        self.pool = ConnectionPool.from_url(
+            redis_url,
+            max_connections=max_connections,
+            socket_timeout=socket_timeout,
+            decode_responses=False
+        )
+        self.redis = Redis(connection_pool=self.pool)
+        self.serializer = serializer or JsonSerializer()
+    
+    async def get(self, key: str) -> Optional[Any]:
+        try:
+            raw = await self.redis.get(key)
+            if raw is None:
+                return None
+            return self.serializer.loads(raw)
+        except Exception as exc:
+            logger.error(f"Cache GET error for key {key}: {exc}")
+            return None
+    
+    async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+        try:
+            data = self.serializer.dumps(value)
+            if ttl:
+                await self.redis.setex(key, ttl, data)
+            else:
+                await self.redis.set(key, data)
+        except Exception as exc:
+            logger.error(f"Cache SET error for key {key}: {exc}")
+    
+    async def delete(self, key: str) -> None:
+        try:
+            await self.redis.delete(key)
+        except Exception as exc:
+            logger.error(f"Cache DELETE error for key {key}: {exc}")
+    
+    async def delete_pattern(self, pattern: str) -> int:
+        try:
+            keys = []
+            async for key in self.redis.scan_iter(match=pattern):
+                keys.append(key)
+            if keys:
+                return await self.redis.delete(*keys)
+            return 0
+        except Exception as exc:
+            logger.error(f"Cache DELETE_PATTERN error for pattern {pattern}: {exc}")
+            return 0
+    
+    async def exists(self, key: str) -> bool:
+        try:
+            return await self.redis.exists(key) > 0
+        except Exception as exc:
+            logger.error(f"Cache EXISTS error for key {key}: {exc}")
+            return False
+    
+    async def ping(self) -> bool:
+        try:
+            return await self.redis.ping()
+        except Exception:
+            return False
+    
+    async def close(self):
+        """Fecha conexões do pool."""
+        await self.redis.close()
+        await self.pool.disconnect()
+
+```
+
+## 5. Cache Serializers
+
+### 📦 **Serialização de Dados**
+
+```Python
+# src/cache/serializers.py
+"""
+Serialização de dados para cache.
+"""
+import json
+import pickle
+from typing import Any, Protocol
+
+
+class Serializer(Protocol):
+    """Protocol para serializers de cache."""
+    
+    def dumps(self, value: Any) -> bytes:
+        ...
+    
+    def loads(self, data: bytes) -> Any:
+        ...
+
+
+class JsonSerializer:
+    """Serializer JSON com suporte a datetime."""
+    
+    def dumps(self, value: Any) -> bytes:
+        return json.dumps(value, default=str).encode("utf-8")
+    
+    def loads(self, data: bytes) -> Any:
+        return json.loads(data.decode("utf-8"))
+
+
+class PickleSerializer:
+    """Serializer Pickle para objetos Python complexos."""
+    
+    def dumps(self, value: Any) -> bytes:
+        return pickle.dumps(value)
+    
+    def loads(self, data: bytes) -> Any:
+        return pickle.loads(data)
+
+
+class CompressedSerializer:
+    """Serializer com compressão para valores grandes."""
+    
+    def __init__(self, base_serializer: Serializer):
+        import zlib
+        self.base = base_serializer
+        self.zlib = zlib
+    
+    def dumps(self, value: Any) -> bytes:
+        data = self.base.dumps(value)
+        return self.zlib.compress(data)
+    
+    def loads(self, data: bytes) -> Any:
+        decompressed = self.zlib.decompress(data)
+        return self.base.loads(decompressed)
+
+```
+
+## 6. Cache Decorators
+
+### 🎭 **Decoradores de Cache**
+
+```Python
+# src/cache/decorators.py
+"""
+Decoradores para cache automático
+"""
+import hashlib
+import inspect
+from functools import wraps
+from typing import Callable, Any, Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def build_cache_key(prefix: str, fn_name: str, args: tuple, kwargs: dict) -> str:
+    """Gera chave de cache a partir de argumentos."""
+    key_parts = [prefix, fn_name]
+    
+    # Adiciona args
+    for arg in args:
+        key_parts.append(str(arg))
+    
+    # Adiciona kwargs ordenados
+    for k in sorted(kwargs.keys()):
+        key_parts.append(f"{k}={kwargs[k]}")
+    
+    key = ":".join(key_parts)
+    
+    # Hash se a chave for muito longa
+    if len(key) > 200:
+        key_hash = hashlib.md5(key.encode()).hexdigest()
+        return f"{prefix}:{fn_name}:hash:{key_hash}"
+    
+    return key
+
+
+def cacheable(
+    cache,
+    ttl: Optional[int] = None,
+    key_prefix: str = "",
+    skip_if: Optional[Callable] = None
+):
+    """Decorator para cache automático de funções.
+    
+    Args:
+        cache: Instância do backend de cache
+        ttl: Time-to-live em segundos
+        key_prefix: Prefixo para chaves de cache
+        skip_if: Função que determina se deve pular cache
+    
+    Example:
+        @cacheable(cache, ttl=300, key_prefix="user")
+        async def get_user(user_id: int):
+            return await db.get_user(user_id)
+    """
+    def decorator(fn: Callable[..., Any]):
+        @wraps(fn)
+        async def wrapper(*args, **kwargs):
+            # Verifica se deve pular cache
+            if skip_if and skip_if(*args, **kwargs):
+                return await fn(*args, **kwargs)
+            
+            # Gera chave
+            key = build_cache_key(key_prefix, fn.__name__, args, kwargs)
+            
+            # Tenta recuperar do cache
+            cached = await cache.get(key)
+            if cached is not None:
+                logger.debug(f"Cache HIT: {key}")
+                return cached
+            
+            # Cache miss - executa função
+            logger.debug(f"Cache MISS: {key}")
+            value = await fn(*args, **kwargs)
+            
+            # Armazena no cache
+            await cache.set(key, value, ttl=ttl)
+            return value
+        
+        return wrapper
+    
+    return decorator
+
+
+def cache_invalidate(cache, key_pattern: str):
+    """Decorator para invalidar cache após execução.
+    
+    Args:
+        cache: Instância do backend de cache
+        key_pattern: Padrão de chaves a invalidar
+    
+    Example:
+        @cache_invalidate(cache, "user:*")
+        async def update_user(user_id: int, data: dict):
+            return await db.update_user(user_id, data)
+    """
+    def decorator(fn: Callable[..., Any]):
+        @wraps(fn)
+        async def wrapper(*args, **kwargs):
+            result = await fn(*args, **kwargs)
+            # Invalida cache após sucesso
+            deleted = await cache.delete_pattern(key_pattern)
+            logger.debug(f"Invalidated {deleted} cache keys matching {key_pattern}")
+            return result
+        
+        return wrapper
+    
+    return decorator
+
+```
+
+## 7. Cache Management
+
+### ⚙️ **Gerenciamento de Cache**
+
+```Python
+# src/cache/management.py
+"""
+Gerenciamento e manutenção de cache
+"""
+import logging
+from typing import List, Optional
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+
+class CacheManager:
+    """Gerenciador de operações de cache."""
+    
+    def __init__(self, cache):
+        self.cache = cache
+    
+    async def invalidate_keys(self, keys: List[str]) -> int:
+        """Invalida lista de chaves específicas.
+        
+        Args:
+            keys: Lista de chaves a invalidar
+            
+        Returns:
+            Número de chaves removidas
+        """
+        count = 0
+        for key in keys:
+            await self.cache.delete(key)
+            count += 1
+        logger.info(f"Invalidated {count} cache keys")
+        return count
+    
+    async def invalidate_prefix(self, prefix: str) -> int:
+        """Invalida todas as chaves com determinado prefixo.
+        
+        Args:
+            prefix: Prefixo das chaves
+            
+        Returns:
+            Número de chaves removidas
+        """
+        pattern = f"{prefix}*"
+        count = await self.cache.delete_pattern(pattern)
+        logger.info(f"Invalidated {count} cache keys with prefix {prefix}")
+        return count
+    
+    async def warm_cache(self, loader_fn, keys: List[str], ttl: Optional[int] = None):
+        """Pre-aquece cache com dados.
+        
+        Args:
+            loader_fn: Função async que carrega dados
+            keys: Lista de chaves a pre-carregar
+            ttl: Time-to-live em segundos
+        """
+        for key in keys:
+            try:
+                value = await loader_fn(key)
+                await self.cache.set(key, value, ttl=ttl)
+            except Exception as exc:
+                logger.error(f"Cache warm error for key {key}: {exc}")
+    
+    async def get_with_fallback(
+        self,
+        key: str,
+        fallback_fn,
+        ttl: Optional[int] = None
+    ):
+        """Recupera do cache ou usa fallback.
+        
+        Args:
+            key: Chave do cache
+            fallback_fn: Função async de fallback
+            ttl: TTL para armazenar resultado do fallback
+            
+        Returns:
+            Valor do cache ou do fallback
+        """
+        value = await self.cache.get(key)
+        if value is not None:
+            return value
+        
+        # Fallback
+        value = await fallback_fn()
+        await self.cache.set(key, value, ttl=ttl)
+        return value
+    
+    async def health_check(self) -> dict:
+        """Verifica saúde do cache.
+        
+        Returns:
+            Dicionário com status do cache
+        """
+        try:
+            is_alive = await self.cache.ping()
+            return {
+                "status": "healthy" if is_alive else "unhealthy",
+                "timestamp": datetime.utcnow().isoformat(),
+                "backend": type(self.cache).__name__
+            }
+        except Exception as exc:
+            return {
+                "status": "error",
+                "error": str(exc),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+```
+
+## 8. Boas práticas
+
+### ✅ **DO`s - Práticas Recomendadas**
+
+```Python
+# Use ttl apropriado por tipo de dado
+CACHE_TTL = {
+    "user_profile": 300,      # 5 minutos
+    "catalog": 900,           # 15 minutos
+    "pricing": 60,            # 1 minuto
+    "static_content": 3600,   # 1 hora
+}
+
+@cacheable(cache, ttl=CACHE_TTL["user_profile"], key_prefix="user")
+async def get_user_profile(user_id: int):
+    return await db.get_user(user_id)
+
+
+# Implemente cache warming para dados críticos
+async def warm_critical_cache():
+    """Pre-aquece cache com dados frequentemente acessados."""
+    critical_users = [1, 2, 3]
+    for user_id in critical_users:
+        profile = await load_user_profile(user_id)
+        await cache.set(f"user:{user_id}", profile, ttl=CACHE_TTL["user_profile"])
+
+
+# Use chaves estruturadas e versionadas
+def build_versioned_key(resource: str, identifier: str, version: str = "v1") -> str:
+    """Gera chave de cache versionada."""
+    return f"{version}:{resource}:{identifier}"
+
+key = build_versioned_key("product", "123")  # v1:product:123
+
+
+# Implemente fallback gracioso
+async def get_product_with_fallback(product_id: int):
+    """Busca produto com fallback para DB."""
+    key = f"product:{product_id}"
+    
+    # Tenta cache primeiro
+    cached = await cache.get(key)
+    if cached:
+        return cached
+    
+    # Fallback para database
+    try:
+        product = await db.get_product(product_id)
+        await cache.set(key, product, ttl=300)
+        return product
+    except Exception as exc:
+        logger.error(f"Failed to load product {product_id}: {exc}")
+        raise
+
+
+# Use invalidação inteligente
+@cache_invalidate(cache, "product:*")
+async def update_product(product_id: int, data: dict):
+    """Atualiza produto e invalida cache relacionado."""
+    result = await db.update_product(product_id, data)
+    # Cache será invalidado automaticamente pelo decorator
+    return result
+
+```
+
+### ❌ **DONT`s - Práticas a Evitar**
+
+```Python
+# Não use cache para dados críticos sem fallback
+# ❌ EVITAR
+async def get_payment_info(payment_id: int):
+    return await cache.get(f"payment:{payment_id}")  # Sem fallback!
+
+# ✅ CORRETO
+async def get_payment_info(payment_id: int):
+    cached = await cache.get(f"payment:{payment_id}")
+    if cached:
+        return cached
+    return await db.get_payment(payment_id)
+
+
+# Não use ttl muito baixo sem necessidade
+# ❌ EVITAR
+TTL_MINIMO = 1  # Cache de 1 segundo não agrega valor
+
+
+# Não use cache de dados sensíveis sem criptografia
+# ❌ EVITAR
+await cache.set("user:password:123", plain_password)  # Nunca!
+
+# ✅ CORRETO - se realmente necessário
+from cryptography.fernet import Fernet
+cipher = Fernet(key)
+encrypted = cipher.encrypt(sensitive_data.encode())
+await cache.set("user:token:123", encrypted, ttl=300)
+
+
+# Não use chaves muito longas ou complexas
+# ❌ EVITAR
+def bad_cache_key(user_id, filters, pagination, sort):
+    # Serializar objetos complexos na chave
+    return f"query:{json.dumps(filters)}:{json.dumps(pagination)}:{sort}"
+
+# ✅ CORRETO
+def good_cache_key(user_id, filters, pagination, sort):
+    # Hash de parâmetros complexos
+    import hashlib
+    params = f"{user_id}{filters}{pagination}{sort}"
+    key_hash = hashlib.md5(params.encode()).hexdigest()
+    return f"query:{user_id}:{key_hash}"
+
+
+# Não esqueça de limpar cache em operações de escrita
+# ❌ EVITAR
+async def update_user(user_id: int, data: dict):
+    result = await db.update_user(user_id, data)
+    # Cache antigo ainda existe!
+    return result
+
+# ✅ CORRETO
+async def update_user(user_id: int, data: dict):
+    result = await db.update_user(user_id, data)
+    await cache.delete(f"user:{user_id}")
+    return result
+
+```
+
+---
+
+Esta regra estabelece padrões sólidos para implementação de cache em aplicações Python/FastAPI.

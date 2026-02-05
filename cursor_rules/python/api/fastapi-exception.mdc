@@ -1,0 +1,2603 @@
+---
+Rule: fastapi-exception.mdc
+Description: Diretrizes para implementações de tratamento de erros em FastAPI, cobrindo exceções globais, exceções customizadas e logging estruturado.
+globs: ["**/exceptions/**/*.py", "**/handlers/**/*.py", "**/errors/**/*.py"]
+alwaysApply: false
+tags: ["fastapi", "api", "exceptions", "handlers"]
+Author: Glauber Duma
+Created: 2026-01
+---
+
+# FastAPI - Tratamento de Exceções
+
+## 1. Objetivo
+
+Esta rule estabelece padrões e melhores práticas para tratamento de exceções em aplicações FastAPI, visando:
+
+- **Consistência**: Padronizar respostas de erro em toda a aplicação com estrutura uniforme
+- **Rastreabilidade**: Implementar sistema de correlação e contexto para debugging eficiente
+- **Clareza**: Fornecer mensagens de erro claras e acionáveis para clientes da API
+- **Segurança**: Evitar exposição de informações sensíveis em mensagens de erro
+- **Observabilidade**: Integrar logging estruturado com níveis apropriados de detalhe
+- **Manutenibilidade**: Organizar exceções de forma hierárquica e semântica
+- **Debugging**: Facilitar identificação e resolução de problemas em produção
+
+## 2. Hierarquia de Exceções
+
+### 🗂️ Estrutura de Arquivos
+
+```
+src/
+├── api/
+│   ├── core/
+│   │   ├── exceptions/
+│   │   │   ├── __init__.py              # Exporta todas as exceções
+│   │   │   ├── base.py                  # Exceções base
+│   │   │   ├── business.py              # Exceções de regras de negócio
+│   │   │   ├── auth.py                  # Exceções de autenticação/autorização
+│   │   │   ├── validation.py            # Exceções de validação
+│   │   │   └── external.py              # Exceções de serviços externos
+│   │   │
+│   │   ├── handlers/
+│   │   │   ├── __init__.py              # Exporta handlers
+│   │   │   ├── exception_handlers.py   # Handlers globais
+│   │   │   ├── http_handlers.py         # Handlers HTTP específicos
+│   │   │   └── async_handlers.py        # Handlers assíncronos
+│   │   │
+│   │   ├── responses/
+│   │   │   ├── __init__.py              # Exporta response builders
+│   │   │   ├── error_responses.py       # Builders de erro
+│   │   │   └── success_responses.py     # Builders de sucesso
+│   │   │
+│   │   ├── middleware/
+│   │   │   ├── __init__.py
+│   │   │   ├── error_middleware.py      # Middleware de erro
+│   │   │   └── correlation_middleware.py # Middleware de correlação
+│   │   │
+│   │   └── context.py                   # Contexto de requisição
+│   │
+│   └── main.py                          # Registro de handlers
+```
+
+### 🏗️ Exceções Base
+
+```python
+# src/api/core/exceptions/base.py
+"""Exceções base da aplicação."""
+
+from typing import Any, Dict, Optional
+from datetime import datetime
+from fastapi import status
+
+
+class AppException(Exception):
+    """
+    Exceção base para todas as exceções da aplicação.
+    
+    Todas as exceções customizadas devem herdar desta classe.
+    """
+    
+    def __init__(
+        self,
+        message: str,
+        error_code: str,
+        status_code: int = status.HTTP_500_INTERNAL_SERVER_ERROR,
+        details: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ):
+        """
+        Args:
+            message: Mensagem de erro amigável para o cliente
+            error_code: Código único de erro para identificação
+            status_code: Status HTTP apropriado
+            details: Informações adicionais sobre o erro
+            headers: Headers HTTP customizados (opcional)
+        """
+        self.message = message
+        self.error_code = error_code
+        self.status_code = status_code
+        self.details = details or {}
+        self.headers = headers or {}
+        self.timestamp = datetime.utcnow()
+        
+        super().__init__(self.message)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Converte exceção para dicionário."""
+        error_dict = {
+            "error": {
+                "message": self.message,
+                "code": self.error_code,
+                "timestamp": self.timestamp.isoformat(),
+            }
+        }
+        
+        if self.details:
+            error_dict["error"]["details"] = self.details
+        
+        return error_dict
+    
+    def __str__(self) -> str:
+        return f"{self.error_code}: {self.message}"
+    
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}("
+            f"message={self.message!r}, "
+            f"error_code={self.error_code!r}, "
+            f"status_code={self.status_code})"
+        )
+
+
+class NotFoundError(AppException):
+    """Exceção base para recursos não encontrados."""
+    
+    def __init__(
+        self,
+        resource: str,
+        identifier: Any,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        message = f"{resource} não encontrado"
+        error_code = f"{resource.upper()}_NOT_FOUND"
+        
+        details = details or {}
+        details.update({
+            "resource": resource,
+            "identifier": str(identifier)
+        })
+        
+        super().__init__(
+            message=message,
+            error_code=error_code,
+            status_code=status.HTTP_404_NOT_FOUND,
+            details=details
+        )
+
+
+class ConflictError(AppException):
+    """Exceção base para conflitos de recursos."""
+    
+    def __init__(
+        self,
+        resource: str,
+        field: str,
+        value: Any,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        message = f"{resource} já existe com {field}={value}"
+        error_code = f"{resource.upper()}_CONFLICT"
+        
+        details = details or {}
+        details.update({
+            "resource": resource,
+            "field": field,
+            "value": str(value)
+        })
+        
+        super().__init__(
+            message=message,
+            error_code=error_code,
+            status_code=status.HTTP_409_CONFLICT,
+            details=details
+        )
+
+
+class ValidationError(AppException):
+    """Exceção base para erros de validação."""
+    
+    def __init__(
+        self,
+        message: str,
+        field: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        error_code = "VALIDATION_ERROR"
+        
+        details = details or {}
+        if field:
+            details["field"] = field
+        
+        super().__init__(
+            message=message,
+            error_code=error_code,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            details=details
+        )
+
+
+class PermissionDeniedError(AppException):
+    """Exceção para negação de permissão."""
+    
+    def __init__(
+        self,
+        message: str = "Você não tem permissão para realizar esta ação",
+        required_permission: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        error_code = "PERMISSION_DENIED"
+        
+        details = details or {}
+        if required_permission:
+            details["required_permission"] = required_permission
+        
+        super().__init__(
+            message=message,
+            error_code=error_code,
+            status_code=status.HTTP_403_FORBIDDEN,
+            details=details
+        )
+
+
+class RateLimitExceededError(AppException):
+    """Exceção para limite de taxa excedido."""
+    
+    def __init__(
+        self,
+        retry_after: int,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        message = f"Limite de requisições excedido. Tente novamente em {retry_after} segundos"
+        error_code = "RATE_LIMIT_EXCEEDED"
+        
+        details = details or {}
+        details["retry_after"] = retry_after
+        
+        headers = {"Retry-After": str(retry_after)}
+        
+        super().__init__(
+            message=message,
+            error_code=error_code,
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            details=details,
+            headers=headers
+        )
+
+
+class ServiceUnavailableError(AppException):
+    """Exceção para serviço indisponível."""
+    
+    def __init__(
+        self,
+        service_name: str,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        message = f"Serviço {service_name} temporariamente indisponível"
+        error_code = "SERVICE_UNAVAILABLE"
+        
+        details = details or {}
+        details["service"] = service_name
+        
+        super().__init__(
+            message=message,
+            error_code=error_code,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            details=details
+        )
+```
+
+## 3. Exceções Específicas por Domínio
+
+### 🔐 **Exceções de Autenticação e Autorização**
+
+```python
+# src/api/core/exceptions/auth.py
+"""Exceções relacionadas à autenticação e autorização."""
+
+from typing import Optional, Dict, Any
+from fastapi import status
+
+from .base import AppException
+
+
+class AuthenticationError(AppException):
+    """Exceção base para erros de autenticação."""
+    
+    def __init__(
+        self,
+        message: str = "Falha na autenticação",
+        error_code: str = "AUTHENTICATION_ERROR",
+        details: Optional[Dict[str, Any]] = None
+    ):
+        super().__init__(
+            message=message,
+            error_code=error_code,
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            details=details,
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+
+class InvalidCredentialsError(AuthenticationError):
+    """Credenciais inválidas."""
+    
+    def __init__(self):
+        super().__init__(
+            message="Email ou senha inválidos",
+            error_code="INVALID_CREDENTIALS"
+        )
+
+
+class TokenExpiredError(AuthenticationError):
+    """Token expirado."""
+    
+    def __init__(self, token_type: str = "access"):
+        super().__init__(
+            message=f"Token de {token_type} expirado",
+            error_code="TOKEN_EXPIRED",
+            details={"token_type": token_type}
+        )
+
+
+class TokenInvalidError(AuthenticationError):
+    """Token inválido."""
+    
+    def __init__(self, reason: Optional[str] = None):
+        details = {"reason": reason} if reason else None
+        super().__init__(
+            message="Token inválido ou malformado",
+            error_code="TOKEN_INVALID",
+            details=details
+        )
+
+
+class TokenRevokedError(AuthenticationError):
+    """Token revogado."""
+    
+    def __init__(self):
+        super().__init__(
+            message="Token foi revogado",
+            error_code="TOKEN_REVOKED"
+        )
+
+
+class InsufficientPermissionsError(AppException):
+    """Permissões insuficientes."""
+    
+    def __init__(
+        self,
+        required_permission: str,
+        current_permissions: Optional[list] = None
+    ):
+        details = {
+            "required_permission": required_permission
+        }
+        if current_permissions:
+            details["current_permissions"] = current_permissions
+        
+        super().__init__(
+            message=f"Permissão necessária: {required_permission}",
+            error_code="INSUFFICIENT_PERMISSIONS",
+            status_code=status.HTTP_403_FORBIDDEN,
+            details=details
+        )
+
+
+class AccountLockedError(AuthenticationError):
+    """Conta bloqueada."""
+    
+    def __init__(self, reason: str, unlock_at: Optional[str] = None):
+        details = {"reason": reason}
+        if unlock_at:
+            details["unlock_at"] = unlock_at
+        
+        super().__init__(
+            message="Conta bloqueada",
+            error_code="ACCOUNT_LOCKED",
+            details=details
+        )
+
+
+class AccountInactiveError(AuthenticationError):
+    """Conta inativa."""
+    
+    def __init__(self):
+        super().__init__(
+            message="Conta inativa. Por favor, ative sua conta",
+            error_code="ACCOUNT_INACTIVE"
+        )
+
+
+class InvalidRefreshTokenError(AuthenticationError):
+    """Refresh token inválido."""
+    
+    def __init__(self):
+        super().__init__(
+            message="Refresh token inválido ou expirado",
+            error_code="INVALID_REFRESH_TOKEN"
+        )
+
+
+class MFARequiredError(AuthenticationError):
+    """MFA obrigatório."""
+    
+    def __init__(self, mfa_methods: list):
+        super().__init__(
+            message="Autenticação de dois fatores necessária",
+            error_code="MFA_REQUIRED",
+            details={"available_methods": mfa_methods}
+        )
+
+
+class InvalidMFACodeError(AuthenticationError):
+    """Código MFA inválido."""
+    
+    def __init__(self, attempts_remaining: Optional[int] = None):
+        details = {}
+        if attempts_remaining is not None:
+            details["attempts_remaining"] = attempts_remaining
+        
+        super().__init__(
+            message="Código de autenticação inválido",
+            error_code="INVALID_MFA_CODE",
+            details=details
+        )
+```
+
+### 💼 **Exceções de Regras de Negócio**
+
+```python
+# src/api/core/exceptions/business.py
+"""Exceções relacionadas às regras de negócio."""
+
+from typing import Optional, Dict, Any
+from fastapi import status
+
+from .base import AppException, NotFoundError, ConflictError
+
+
+class UserNotFoundError(NotFoundError):
+    """Usuário não encontrado."""
+    
+    def __init__(self, user_id: Any):
+        super().__init__(
+            resource="User",
+            identifier=user_id
+        )
+
+
+class UserAlreadyExistsError(ConflictError):
+    """Usuário já existe."""
+    
+    def __init__(self, email: str):
+        super().__init__(
+            resource="User",
+            field="email",
+            value=email
+        )
+
+
+class ProductNotFoundError(NotFoundError):
+    """Produto não encontrado."""
+    
+    def __init__(self, product_id: Any):
+        super().__init__(
+            resource="Product",
+            identifier=product_id
+        )
+
+
+class InsufficientStockError(AppException):
+    """Estoque insuficiente."""
+    
+    def __init__(
+        self,
+        product_id: Any,
+        requested: int,
+        available: int
+    ):
+        super().__init__(
+            message="Estoque insuficiente para completar a operação",
+            error_code="INSUFFICIENT_STOCK",
+            status_code=status.HTTP_409_CONFLICT,
+            details={
+                "product_id": str(product_id),
+                "requested": requested,
+                "available": available
+            }
+        )
+
+
+class InvalidOrderStatusError(AppException):
+    """Status de pedido inválido."""
+    
+    def __init__(
+        self,
+        current_status: str,
+        attempted_status: str,
+        allowed_transitions: list
+    ):
+        super().__init__(
+            message=f"Não é possível mudar status de {current_status} para {attempted_status}",
+            error_code="INVALID_ORDER_STATUS_TRANSITION",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            details={
+                "current_status": current_status,
+                "attempted_status": attempted_status,
+                "allowed_transitions": allowed_transitions
+            }
+        )
+
+
+class PaymentFailedError(AppException):
+    """Falha no pagamento."""
+    
+    def __init__(
+        self,
+        reason: str,
+        transaction_id: Optional[str] = None
+    ):
+        details = {"reason": reason}
+        if transaction_id:
+            details["transaction_id"] = transaction_id
+        
+        super().__init__(
+            message="Falha ao processar pagamento",
+            error_code="PAYMENT_FAILED",
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            details=details
+        )
+
+
+class QuotaExceededError(AppException):
+    """Cota excedida."""
+    
+    def __init__(
+        self,
+        resource: str,
+        limit: int,
+        current: int
+    ):
+        super().__init__(
+            message=f"Limite de {resource} excedido",
+            error_code="QUOTA_EXCEEDED",
+            status_code=status.HTTP_403_FORBIDDEN,
+            details={
+                "resource": resource,
+                "limit": limit,
+                "current": current
+            }
+        )
+
+
+class InvalidBusinessRuleError(AppException):
+    """Regra de negócio violada."""
+    
+    def __init__(
+        self,
+        rule_name: str,
+        violation_reason: str,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        details = details or {}
+        details.update({
+            "rule": rule_name,
+            "reason": violation_reason
+        })
+        
+        super().__init__(
+            message=f"Violação de regra de negócio: {rule_name}",
+            error_code="BUSINESS_RULE_VIOLATION",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            details=details
+        )
+
+
+class ResourceLockError(AppException):
+    """Recurso bloqueado."""
+    
+    def __init__(
+        self,
+        resource: str,
+        resource_id: Any,
+        locked_by: Optional[str] = None
+    ):
+        details = {
+            "resource": resource,
+            "resource_id": str(resource_id)
+        }
+        if locked_by:
+            details["locked_by"] = locked_by
+        
+        super().__init__(
+            message=f"{resource} está bloqueado e não pode ser modificado",
+            error_code="RESOURCE_LOCKED",
+            status_code=status.HTTP_423_LOCKED,
+            details=details
+        )
+```
+
+### ✅ **Exceções de Validação**
+
+```python
+# src/api/core/exceptions/validation.py
+"""Exceções relacionadas à validação de dados."""
+
+from typing import Optional, Dict, Any, List
+from fastapi import status
+
+from .base import AppException
+
+
+class InvalidInputError(AppException):
+    """Entrada inválida."""
+    
+    def __init__(
+        self,
+        field: str,
+        message: str,
+        value: Any = None
+    ):
+        details = {"field": field}
+        if value is not None:
+            details["provided_value"] = str(value)
+        
+        super().__init__(
+            message=message,
+            error_code="INVALID_INPUT",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            details=details
+        )
+
+
+class InvalidEmailFormatError(InvalidInputError):
+    """Formato de email inválido."""
+    
+    def __init__(self, email: str):
+        super().__init__(
+            field="email",
+            message="Formato de email inválido",
+            value=email
+        )
+
+
+class InvalidDateRangeError(AppException):
+    """Range de datas inválido."""
+    
+    def __init__(self, start_date: str, end_date: str, reason: str):
+        super().__init__(
+            message=f"Range de datas inválido: {reason}",
+            error_code="INVALID_DATE_RANGE",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            details={
+                "start_date": start_date,
+                "end_date": end_date,
+                "reason": reason
+            }
+        )
+
+
+class MissingRequiredFieldError(AppException):
+    """Campo obrigatório ausente."""
+    
+    def __init__(self, field: str):
+        super().__init__(
+            message=f"Campo obrigatório ausente: {field}",
+            error_code="MISSING_REQUIRED_FIELD",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            details={"field": field}
+        )
+
+
+class InvalidFileTypeError(AppException):
+    """Tipo de arquivo inválido."""
+    
+    def __init__(
+        self,
+        provided_type: str,
+        allowed_types: List[str]
+    ):
+        super().__init__(
+            message=f"Tipo de arquivo não permitido: {provided_type}",
+            error_code="INVALID_FILE_TYPE",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            details={
+                "provided_type": provided_type,
+                "allowed_types": allowed_types
+            }
+        )
+
+
+class FileTooLargeError(AppException):
+    """Arquivo muito grande."""
+    
+    def __init__(
+        self,
+        file_size: int,
+        max_size: int
+    ):
+        super().__init__(
+            message=f"Arquivo muito grande. Máximo permitido: {max_size} bytes",
+            error_code="FILE_TOO_LARGE",
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            details={
+                "file_size": file_size,
+                "max_size": max_size,
+                "max_size_mb": round(max_size / (1024 * 1024), 2)
+            }
+        )
+
+
+class InvalidEnumValueError(AppException):
+    """Valor de enum inválido."""
+    
+    def __init__(
+        self,
+        field: str,
+        value: str,
+        allowed_values: List[str]
+    ):
+        super().__init__(
+            message=f"Valor inválido para {field}: {value}",
+            error_code="INVALID_ENUM_VALUE",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            details={
+                "field": field,
+                "provided_value": value,
+                "allowed_values": allowed_values
+            }
+        )
+
+
+class ValidationGroupError(AppException):
+    """Múltiplos erros de validação."""
+    
+    def __init__(self, errors: List[Dict[str, Any]]):
+        super().__init__(
+            message=f"Múltiplos erros de validação encontrados ({len(errors)} erros)",
+            error_code="VALIDATION_GROUP_ERROR",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            details={"errors": errors}
+        )
+```
+
+### 🌐 **Exceções de Serviços Externos**
+
+```python
+# src/api/core/exceptions/external.py
+"""Exceções para integrações com serviços externos."""
+
+from typing import Optional, Dict, Any
+from fastapi import status
+
+from .base import AppException
+
+
+class ExternalServiceError(AppException):
+    """Erro base para serviços externos."""
+    
+    def __init__(
+        self,
+        service_name: str,
+        message: str,
+        error_code: str = "EXTERNAL_SERVICE_ERROR",
+        status_code: int = status.HTTP_502_BAD_GATEWAY,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        details = details or {}
+        details["service"] = service_name
+        
+        super().__init__(
+            message=message,
+            error_code=error_code,
+            status_code=status_code,
+            details=details
+        )
+
+
+class ExternalAPIError(ExternalServiceError):
+    """Erro de API externa."""
+    
+    def __init__(
+        self,
+        service_name: str,
+        endpoint: str,
+        http_status: int,
+        response_body: Optional[str] = None
+    ):
+        details = {
+            "endpoint": endpoint,
+            "http_status": http_status
+        }
+        if response_body:
+            details["response"] = response_body
+        
+        super().__init__(
+            service_name=service_name,
+            message=f"Erro ao comunicar com {service_name}",
+            error_code="EXTERNAL_API_ERROR",
+            details=details
+        )
+
+
+class ExternalAPITimeoutError(ExternalServiceError):
+    """Timeout em API externa."""
+    
+    def __init__(
+        self,
+        service_name: str,
+        timeout_seconds: float
+    ):
+        super().__init__(
+            service_name=service_name,
+            message=f"Timeout ao comunicar com {service_name}",
+            error_code="EXTERNAL_API_TIMEOUT",
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            details={"timeout_seconds": timeout_seconds}
+        )
+
+
+class PaymentGatewayError(ExternalServiceError):
+    """Erro no gateway de pagamento."""
+    
+    def __init__(
+        self,
+        gateway_name: str,
+        error_message: str,
+        transaction_id: Optional[str] = None
+    ):
+        details = {"error_message": error_message}
+        if transaction_id:
+            details["transaction_id"] = transaction_id
+        
+        super().__init__(
+            service_name=gateway_name,
+            message="Erro ao processar pagamento",
+            error_code="PAYMENT_GATEWAY_ERROR",
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            details=details
+        )
+
+
+class EmailServiceError(ExternalServiceError):
+    """Erro no serviço de email."""
+    
+    def __init__(
+        self,
+        provider: str,
+        recipient: str,
+        error_message: str
+    ):
+        super().__init__(
+            service_name=provider,
+            message="Falha ao enviar email",
+            error_code="EMAIL_SERVICE_ERROR",
+            details={
+                "recipient": recipient,
+                "error_message": error_message
+            }
+        )
+
+
+class StorageServiceError(ExternalServiceError):
+    """Erro no serviço de storage."""
+    
+    def __init__(
+        self,
+        provider: str,
+        operation: str,
+        file_path: str,
+        error_message: str
+    ):
+        super().__init__(
+            service_name=provider,
+            message=f"Erro ao {operation} arquivo",
+            error_code="STORAGE_SERVICE_ERROR",
+            details={
+                "operation": operation,
+                "file_path": file_path,
+                "error_message": error_message
+            }
+        )
+
+
+class DatabaseConnectionError(AppException):
+    """Erro de conexão com banco de dados."""
+    
+    def __init__(
+        self,
+        database_name: str,
+        error_message: str
+    ):
+        super().__init__(
+            message="Erro ao conectar com banco de dados",
+            error_code="DATABASE_CONNECTION_ERROR",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            details={
+                "database": database_name,
+                "error_message": error_message
+            }
+        )
+
+
+class CacheServiceError(ExternalServiceError):
+    """Erro no serviço de cache."""
+    
+    def __init__(
+        self,
+        cache_provider: str,
+        operation: str,
+        key: str
+    ):
+        super().__init__(
+            service_name=cache_provider,
+            message=f"Erro ao {operation} cache",
+            error_code="CACHE_SERVICE_ERROR",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            details={
+                "operation": operation,
+                "key": key
+            }
+        )
+```
+
+## 4. Exception Handlers
+
+### 🛠️ **Handlers Globais**
+
+```python
+# src/api/core/handlers/exception_handlers.py
+"""Exception handlers globais para FastAPI."""
+
+import logging
+from typing import Union
+from datetime import datetime
+
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+
+from ..exceptions.base import AppException
+from ..responses.error_responses import ErrorResponseBuilder
+from ..context import get_request_id
+
+logger = logging.getLogger(__name__)
+
+
+async def app_exception_handler(
+    request: Request,
+    exc: AppException
+) -> JSONResponse:
+    """
+    Handler para exceções customizadas da aplicação.
+    
+    Trata todas as exceções que herdam de AppException.
+    """
+    request_id = get_request_id()
+    
+    # Log baseado no status code
+    log_data = {
+        "request_id": request_id,
+        "path": request.url.path,
+        "method": request.method,
+        "error_code": exc.error_code,
+        "message": exc.message,
+        "status_code": exc.status_code
+    }
+    
+    if exc.status_code >= 500:
+        logger.error(
+            f"Server error: {exc.error_code}",
+            extra=log_data,
+            exc_info=True
+        )
+    elif exc.status_code >= 400:
+        logger.warning(
+            f"Client error: {exc.error_code}",
+            extra=log_data
+        )
+    
+    # Construir response
+    response_data = exc.to_dict()
+    response_data["error"]["request_id"] = request_id
+    response_data["error"]["path"] = request.url.path
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=response_data,
+        headers=exc.headers
+    )
+
+
+async def http_exception_handler(
+    request: Request,
+    exc: HTTPException
+) -> JSONResponse:
+    """Handler para HTTPException padrão do FastAPI."""
+    request_id = get_request_id()
+    
+    logger.warning(
+        f"HTTP exception: {exc.status_code}",
+        extra={
+            "request_id": request_id,
+            "path": request.url.path,
+            "status_code": exc.status_code,
+            "detail": exc.detail
+        }
+    )
+    
+    response = ErrorResponseBuilder.build_error_response(
+        message=exc.detail,
+        error_code=f"HTTP_{exc.status_code}",
+        status_code=exc.status_code,
+        request_id=request_id,
+        path=request.url.path
+    )
+    
+    headers = getattr(exc, "headers", None)
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=response,
+        headers=headers
+    )
+
+
+async def validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError
+) -> JSONResponse:
+    """Handler para erros de validação Pydantic."""
+    request_id = get_request_id()
+    
+    # Formatar erros de validação
+    validation_errors = []
+    for error in exc.errors():
+        field_path = " -> ".join(str(loc) for loc in error["loc"])
+        validation_errors.append({
+            "field": field_path,
+            "message": error["msg"],
+            "type": error["type"],
+            "input": error.get("input")
+        })
+    
+    logger.warning(
+        "Validation error",
+        extra={
+            "request_id": request_id,
+            "path": request.url.path,
+            "errors": validation_errors
+        }
+    )
+    
+    response = ErrorResponseBuilder.build_validation_error_response(
+        errors=validation_errors,
+        request_id=request_id,
+        path=request.url.path
+    )
+    
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content=response
+    )
+
+
+async def integrity_error_handler(
+    request: Request,
+    exc: IntegrityError
+) -> JSONResponse:
+    """Handler para erros de integridade do banco."""
+    request_id = get_request_id()
+    
+    logger.error(
+        "Database integrity error",
+        extra={
+            "request_id": request_id,
+            "path": request.url.path,
+            "error": str(exc)
+        },
+        exc_info=True
+    )
+    
+    # Interpretar erro de integridade
+    error_msg = str(exc.orig) if hasattr(exc, 'orig') else str(exc)
+    
+    if "unique constraint" in error_msg.lower() or "duplicate" in error_msg.lower():
+        message = "Registro duplicado. Este valor já existe."
+        error_code = "DUPLICATE_ENTRY"
+        status_code = status.HTTP_409_CONFLICT
+    elif "foreign key constraint" in error_msg.lower():
+        message = "Operação violou restrição de integridade. Verifique dependências."
+        error_code = "FOREIGN_KEY_VIOLATION"
+        status_code = status.HTTP_409_CONFLICT
+    elif "not null constraint" in error_msg.lower():
+        message = "Campo obrigatório não fornecido."
+        error_code = "NOT_NULL_VIOLATION"
+        status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    else:
+        message = "Erro de integridade de dados."
+        error_code = "INTEGRITY_ERROR"
+        status_code = status.HTTP_409_CONFLICT
+    
+    response = ErrorResponseBuilder.build_error_response(
+        message=message,
+        error_code=error_code,
+        status_code=status_code,
+        request_id=request_id,
+        path=request.url.path
+    )
+    
+    return JSONResponse(
+        status_code=status_code,
+        content=response
+    )
+
+
+async def sqlalchemy_exception_handler(
+    request: Request,
+    exc: SQLAlchemyError
+) -> JSONResponse:
+    """Handler genérico para erros do SQLAlchemy."""
+    request_id = get_request_id()
+    
+    logger.error(
+        "Database error",
+        extra={
+            "request_id": request_id,
+            "path": request.url.path,
+            "error_type": type(exc).__name__
+        },
+        exc_info=True
+    )
+    
+    response = ErrorResponseBuilder.build_error_response(
+        message="Erro ao processar operação no banco de dados",
+        error_code="DATABASE_ERROR",
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        request_id=request_id,
+        path=request.url.path
+    )
+    
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content=response
+    )
+
+
+async def generic_exception_handler(
+    request: Request,
+    exc: Exception
+) -> JSONResponse:
+    """Handler genérico para exceções não tratadas."""
+    request_id = get_request_id()
+    
+    logger.critical(
+        "Unhandled exception",
+        extra={
+            "request_id": request_id,
+            "path": request.url.path,
+            "method": request.method,
+            "exception_type": type(exc).__name__,
+            "exception_message": str(exc)
+        },
+        exc_info=True
+    )
+    
+    # Em produção, não expor detalhes do erro
+    response = ErrorResponseBuilder.build_error_response(
+        message="Erro interno do servidor",
+        error_code="INTERNAL_SERVER_ERROR",
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        request_id=request_id,
+        path=request.url.path
+    )
+    
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content=response
+    )
+
+
+def register_exception_handlers(app: FastAPI) -> None:
+    """
+    Registra todos os exception handlers na aplicação.
+    
+    Args:
+        app: Instância do FastAPI
+    
+    Uso:
+        app = FastAPI()
+        register_exception_handlers(app)
+    """
+    # Handlers customizados (ordem importa - mais específico primeiro)
+    app.add_exception_handler(AppException, app_exception_handler)
+    app.add_exception_handler(HTTPException, http_exception_handler)
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.add_exception_handler(IntegrityError, integrity_error_handler)
+    app.add_exception_handler(SQLAlchemyError, sqlalchemy_exception_handler)
+    app.add_exception_handler(Exception, generic_exception_handler)
+    
+    logger.info("Exception handlers registrados com sucesso")
+```
+
+### 🎯 **Handlers HTTP Específicos**
+
+```python
+# src/api/core/handlers/http_handlers.py
+"""Handlers para exceções HTTP específicas."""
+
+import logging
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from ..responses.error_responses import ErrorResponseBuilder
+from ..context import get_request_id
+
+logger = logging.getLogger(__name__)
+
+
+async def not_found_handler(
+    request: Request,
+    exc: StarletteHTTPException
+) -> JSONResponse:
+    """Handler específico para 404 Not Found."""
+    request_id = get_request_id()
+    
+    logger.info(
+        f"Resource not found: {request.url.path}",
+        extra={
+            "request_id": request_id,
+            "path": request.url.path,
+            "method": request.method
+        }
+    )
+    
+    response = ErrorResponseBuilder.build_error_response(
+        message=f"Rota não encontrada: {request.url.path}",
+        error_code="ROUTE_NOT_FOUND",
+        status_code=404,
+        request_id=request_id,
+        path=request.url.path,
+        details={
+            "available_routes": "Consulte /docs para rotas disponíveis"
+        }
+    )
+    
+    return JSONResponse(status_code=404, content=response)
+
+
+async def method_not_allowed_handler(
+    request: Request,
+    exc: StarletteHTTPException
+) -> JSONResponse:
+    """Handler para 405 Method Not Allowed."""
+    request_id = get_request_id()
+    
+    response = ErrorResponseBuilder.build_error_response(
+        message=f"Método {request.method} não permitido para esta rota",
+        error_code="METHOD_NOT_ALLOWED",
+        status_code=405,
+        request_id=request_id,
+        path=request.url.path
+    )
+    
+    return JSONResponse(status_code=405, content=response)
+```
+
+### ⚡ **Handlers Assíncronos**
+
+```python
+# src/api/core/handlers/async_handlers.py
+"""Handlers para exceções assíncronas."""
+
+import asyncio
+import logging
+from typing import Callable
+from functools import wraps
+
+from fastapi import HTTPException, status
+
+from ..exceptions.external import ExternalAPITimeoutError
+
+logger = logging.getLogger(__name__)
+
+
+def handle_async_timeout(timeout: float, service_name: str):
+    """
+    Decorator para tratar timeouts em operações assíncronas.
+    
+    Args:
+        timeout: Tempo limite em segundos
+        service_name: Nome do serviço para contexto
+    
+    Uso:
+        @handle_async_timeout(timeout=30.0, service_name="Payment Gateway")
+        async def process_payment():
+            ...
+    """
+    def decorator(func: Callable):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            try:
+                return await asyncio.wait_for(
+                    func(*args, **kwargs),
+                    timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"Timeout in {service_name}",
+                    extra={
+                        "service": service_name,
+                        "timeout": timeout,
+                        "function": func.__name__
+                    }
+                )
+                raise ExternalAPITimeoutError(
+                    service_name=service_name,
+                    timeout_seconds=timeout
+                )
+        
+        return wrapper
+    return decorator
+
+
+def retry_on_exception(
+    max_retries: int = 3,
+    delay: float = 1.0,
+    backoff: float = 2.0,
+    exceptions: tuple = (Exception,)
+):
+    """
+    Decorator para retry automático em caso de exceção.
+    
+    Args:
+        max_retries: Número máximo de tentativas
+        delay: Delay inicial entre tentativas (segundos)
+        backoff: Multiplicador do delay a cada tentativa
+        exceptions: Tupla de exceções que devem disparar retry
+    
+    Uso:
+        @retry_on_exception(max_retries=3, exceptions=(ConnectionError,))
+        async def fetch_data():
+            ...
+    """
+    def decorator(func: Callable):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            current_delay = delay
+            last_exception = None
+            
+            for attempt in range(max_retries + 1):
+                try:
+                    return await func(*args, **kwargs)
+                except exceptions as e:
+                    last_exception = e
+                    
+                    if attempt < max_retries:
+                        logger.warning(
+                            f"Attempt {attempt + 1}/{max_retries} failed, retrying...",
+                            extra={
+                                "function": func.__name__,
+                                "attempt": attempt + 1,
+                                "delay": current_delay,
+                                "error": str(e)
+                            }
+                        )
+                        await asyncio.sleep(current_delay)
+                        current_delay *= backoff
+                    else:
+                        logger.error(
+                            f"All {max_retries} retry attempts failed",
+                            extra={
+                                "function": func.__name__,
+                                "error": str(e)
+                            },
+                            exc_info=True
+                        )
+            
+            # Se chegou aqui, todas as tentativas falharam
+            raise last_exception
+        
+        return wrapper
+    return decorator
+```
+
+## 5. Respostas de Erro Padronizadas
+
+### 🏗️ **Error Response Builder**
+
+```python
+# src/api/core/responses/error_responses.py
+"""Builder para respostas de erro padronizadas."""
+
+from typing import Any, Dict, Optional, List
+from datetime import datetime
+
+
+class ErrorResponseBuilder:
+    """Builder para construção de respostas de erro padronizadas."""
+    
+    @staticmethod
+    def build_error_response(
+        message: str,
+        error_code: str,
+        status_code: int,
+        request_id: Optional[str] = None,
+        path: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+        timestamp: Optional[datetime] = None
+    ) -> Dict[str, Any]:
+        """
+        Constrói resposta de erro padronizada.
+        
+        Args:
+            message: Mensagem de erro amigável
+            error_code: Código único do erro
+            status_code: Status HTTP
+            request_id: ID da requisição para rastreamento
+            path: Path da requisição
+            details: Detalhes adicionais do erro
+            timestamp: Timestamp do erro
+        
+        Returns:
+            Dicionário com estrutura padronizada de erro
+        """
+        error_response = {
+            "error": {
+                "message": message,
+                "code": error_code,
+                "status": status_code,
+                "timestamp": (timestamp or datetime.utcnow()).isoformat()
+            }
+        }
+        
+        if request_id:
+            error_response["error"]["request_id"] = request_id
+        
+        if path:
+            error_response["error"]["path"] = path
+        
+        if details:
+            error_response["error"]["details"] = details
+        
+        return error_response
+    
+    @staticmethod
+    def build_validation_error_response(
+        errors: List[Dict[str, Any]],
+        request_id: Optional[str] = None,
+        path: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Constrói resposta para erros de validação.
+        
+        Args:
+            errors: Lista de erros de validação
+            request_id: ID da requisição
+            path: Path da requisição
+        
+        Returns:
+            Dicionário com estrutura de erro de validação
+        """
+        return ErrorResponseBuilder.build_error_response(
+            message=f"Erro de validação ({len(errors)} erro(s) encontrado(s))",
+            error_code="VALIDATION_ERROR",
+            status_code=422,
+            request_id=request_id,
+            path=path,
+            details={"validation_errors": errors}
+        )
+    
+    @staticmethod
+    def build_auth_error_response(
+        message: str = "Autenticação necessária",
+        request_id: Optional[str] = None,
+        path: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Constrói resposta para erros de autenticação."""
+        return ErrorResponseBuilder.build_error_response(
+            message=message,
+            error_code="AUTHENTICATION_REQUIRED",
+            status_code=401,
+            request_id=request_id,
+            path=path
+        )
+    
+    @staticmethod
+    def build_permission_error_response(
+        message: str = "Permissão negada",
+        required_permission: Optional[str] = None,
+        request_id: Optional[str] = None,
+        path: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Constrói resposta para erros de permissão."""
+        details = {}
+        if required_permission:
+            details["required_permission"] = required_permission
+        
+        return ErrorResponseBuilder.build_error_response(
+            message=message,
+            error_code="PERMISSION_DENIED",
+            status_code=403,
+            request_id=request_id,
+            path=path,
+            details=details if details else None
+        )
+    
+    @staticmethod
+    def build_not_found_response(
+        resource: str,
+        identifier: Any,
+        request_id: Optional[str] = None,
+        path: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Constrói resposta para recurso não encontrado."""
+        return ErrorResponseBuilder.build_error_response(
+            message=f"{resource} não encontrado",
+            error_code=f"{resource.upper()}_NOT_FOUND",
+            status_code=404,
+            request_id=request_id,
+            path=path,
+            details={
+                "resource": resource,
+                "identifier": str(identifier)
+            }
+        )
+    
+    @staticmethod
+    def build_conflict_response(
+        resource: str,
+        field: str,
+        value: Any,
+        request_id: Optional[str] = None,
+        path: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Constrói resposta para conflito de recursos."""
+        return ErrorResponseBuilder.build_error_response(
+            message=f"{resource} já existe com {field}={value}",
+            error_code=f"{resource.upper()}_CONFLICT",
+            status_code=409,
+            request_id=request_id,
+            path=path,
+            details={
+                "resource": resource,
+                "field": field,
+                "value": str(value)
+            }
+        )
+```
+
+### ✨ **Success Response Builder**
+
+```python
+# src/api/core/responses/success_responses.py
+"""Builder para respostas de sucesso padronizadas."""
+
+from typing import Any, Dict, Optional
+from datetime import datetime
+
+
+class SuccessResponseBuilder:
+    """Builder para construção de respostas de sucesso padronizadas."""
+    
+    @staticmethod
+    def build_success_response(
+        data: Any,
+        message: Optional[str] = None,
+        meta: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Constrói resposta de sucesso padronizada.
+        
+        Args:
+            data: Dados da resposta
+            message: Mensagem opcional de sucesso
+            meta: Metadados adicionais
+        
+        Returns:
+            Dicionário com estrutura padronizada
+        """
+        response = {"data": data}
+        
+        if message:
+            response["message"] = message
+        
+        if meta:
+            response["meta"] = meta
+        
+        return response
+    
+    @staticmethod
+    def build_list_response(
+        items: list,
+        total: int,
+        page: int = 1,
+        page_size: int = 100,
+        meta: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Constrói resposta de lista com paginação."""
+        pagination_meta = {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size,
+            "has_next": page * page_size < total,
+            "has_previous": page > 1
+        }
+        
+        if meta:
+            pagination_meta.update(meta)
+        
+        return SuccessResponseBuilder.build_success_response(
+            data=items,
+            meta=pagination_meta
+        )
+    
+    @staticmethod
+    def build_created_response(
+        data: Any,
+        resource_id: Any,
+        message: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Constrói resposta para recurso criado (201)."""
+        return SuccessResponseBuilder.build_success_response(
+            data=data,
+            message=message or "Recurso criado com sucesso",
+            meta={"resource_id": str(resource_id)}
+        )
+    
+    @staticmethod
+    def build_no_content_response() -> None:
+        """Retorna None para 204 No Content."""
+        return None
+```
+
+### 🔄 **Middleware de Response Formatting**
+
+```python
+# src/api/core/middleware/response_middleware.py
+"""Middleware para formatação de respostas."""
+
+import time
+import logging
+from typing import Callable
+from fastapi import Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+
+from ..context import get_request_id
+
+logger = logging.getLogger(__name__)
+
+
+class ResponseFormattingMiddleware(BaseHTTPMiddleware):
+    """Middleware para adicionar headers e formatar respostas."""
+    
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable
+    ) -> Response:
+        """
+        Processa requisição e adiciona headers de resposta.
+        """
+        start_time = time.time()
+        request_id = get_request_id()
+        
+        # Processar requisição
+        response = await call_next(request)
+        
+        # Calcular tempo de processamento
+        process_time = time.time() - start_time
+        
+        # Adicionar headers customizados
+        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Process-Time"] = f"{process_time:.4f}"
+        response.headers["X-API-Version"] = "1.0.0"
+        
+        # Log da resposta
+        logger.info(
+            f"{request.method} {request.url.path} - {response.status_code}",
+            extra={
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "process_time": f"{process_time:.4f}s"
+            }
+        )
+        
+        return response
+```
+
+## 6. Contexto e Correlação
+
+### 🔍 **Request Context e Tracing**
+
+```python
+# src/api/core/context.py
+"""Contexto de requisição e rastreamento."""
+
+import uuid
+from contextvars import ContextVar
+from typing import Optional
+
+# ContextVars para armazenar informações da requisição
+request_id_var: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
+user_id_var: ContextVar[Optional[str]] = ContextVar("user_id", default=None)
+correlation_id_var: ContextVar[Optional[str]] = ContextVar("correlation_id", default=None)
+
+
+def generate_request_id() -> str:
+    """Gera um novo ID de requisição."""
+    return str(uuid.uuid4())
+
+
+def set_request_id(request_id: str) -> None:
+    """Define o ID da requisição no contexto."""
+    request_id_var.set(request_id)
+
+
+def get_request_id() -> Optional[str]:
+    """Obtém o ID da requisição do contexto."""
+    return request_id_var.get()
+
+
+def set_user_id(user_id: str) -> None:
+    """Define o ID do usuário no contexto."""
+    user_id_var.set(user_id)
+
+
+def get_user_id() -> Optional[str]:
+    """Obtém o ID do usuário do contexto."""
+    return user_id_var.get()
+
+
+def set_correlation_id(correlation_id: str) -> None:
+    """Define o ID de correlação no contexto."""
+    correlation_id_var.set(correlation_id)
+
+
+def get_correlation_id() -> Optional[str]:
+    """Obtém o ID de correlação do contexto."""
+    return correlation_id_var.get()
+
+
+def clear_context() -> None:
+    """Limpa todo o contexto."""
+    request_id_var.set(None)
+    user_id_var.set(None)
+    correlation_id_var.set(None)
+```
+
+### 🎯 **Decorador para Contexto Automático**
+
+```python
+# src/api/core/decorators/context_decorator.py
+"""Decoradores para gerenciamento de contexto."""
+
+import logging
+from typing import Callable
+from functools import wraps
+
+from ..context import get_request_id, get_user_id
+
+logger = logging.getLogger(__name__)
+
+
+def with_context(operation_name: str):
+    """
+    Decorator que adiciona contexto automaticamente ao log.
+    
+    Args:
+        operation_name: Nome da operação para contexto
+    
+    Uso:
+        @with_context("create_user")
+        async def create_user(data: UserCreate):
+            ...
+    """
+    def decorator(func: Callable):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            request_id = get_request_id()
+            user_id = get_user_id()
+            
+            log_context = {
+                "operation": operation_name,
+                "request_id": request_id,
+                "user_id": user_id,
+                "function": func.__name__
+            }
+            
+            logger.info(
+                f"Starting operation: {operation_name}",
+                extra=log_context
+            )
+            
+            try:
+                result = await func(*args, **kwargs)
+                
+                logger.info(
+                    f"Operation completed: {operation_name}",
+                    extra=log_context
+                )
+                
+                return result
+            
+            except Exception as e:
+                logger.error(
+                    f"Operation failed: {operation_name}",
+                    extra={
+                        **log_context,
+                        "error": str(e),
+                        "error_type": type(e).__name__
+                    },
+                    exc_info=True
+                )
+                raise
+        
+        return wrapper
+    return decorator
+
+
+def log_exceptions(func: Callable):
+    """
+    Decorator que loga exceções automaticamente com contexto.
+    
+    Uso:
+        @log_exceptions
+        async def risky_operation():
+            ...
+    """
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except Exception as e:
+            logger.error(
+                f"Exception in {func.__name__}",
+                extra={
+                    "function": func.__name__,
+                    "request_id": get_request_id(),
+                    "user_id": get_user_id(),
+                    "exception_type": type(e).__name__,
+                    "exception_message": str(e)
+                },
+                exc_info=True
+            )
+            raise
+    
+    return wrapper
+```
+
+### 🔗 **Middleware de Correlação**
+
+```python
+# src/api/core/middleware/correlation_middleware.py
+"""Middleware para correlação de requisições."""
+
+import logging
+from typing import Callable
+from fastapi import Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from ..context import (
+    generate_request_id,
+    set_request_id,
+    set_correlation_id,
+    get_request_id,
+    clear_context
+)
+
+logger = logging.getLogger(__name__)
+
+
+class CorrelationMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware que gerencia IDs de correlação e rastreamento.
+    
+    Adiciona X-Request-ID e X-Correlation-ID aos headers.
+    """
+    
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable
+    ) -> Response:
+        """
+        Processa requisição e adiciona IDs de rastreamento.
+        """
+        # Obter ou gerar request_id
+        request_id = request.headers.get("X-Request-ID") or generate_request_id()
+        set_request_id(request_id)
+        
+        # Obter ou gerar correlation_id
+        correlation_id = request.headers.get("X-Correlation-ID") or request_id
+        set_correlation_id(correlation_id)
+        
+        # Adicionar ao contexto de log
+        logger.info(
+            f"Incoming request: {request.method} {request.url.path}",
+            extra={
+                "request_id": request_id,
+                "correlation_id": correlation_id,
+                "method": request.method,
+                "path": request.url.path,
+                "client_ip": request.client.host if request.client else None
+            }
+        )
+        
+        try:
+            # Processar requisição
+            response = await call_next(request)
+            
+            # Adicionar headers de rastreamento
+            response.headers["X-Request-ID"] = request_id
+            response.headers["X-Correlation-ID"] = correlation_id
+            
+            return response
+        
+        finally:
+            # Limpar contexto após requisição
+            clear_context()
+```
+
+## 7. Configuração e Registro
+
+### ⚙️ **Setup de Exception Handlers**
+
+```python
+# src/api/main.py
+"""Configuração principal da aplicação com exception handlers."""
+
+import logging
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from src.api.core.handlers.exception_handlers import register_exception_handlers
+from src.api.core.handlers.http_handlers import (
+    not_found_handler,
+    method_not_allowed_handler
+)
+from src.api.core.middleware.correlation_middleware import CorrelationMiddleware
+from src.api.core.middleware.response_middleware import ResponseFormattingMiddleware
+from src.api.v1.router import api_router
+
+# Configurar logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s - %(request_id)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+logger = logging.getLogger(__name__)
+
+# Criar aplicação
+app = FastAPI(
+    title="API com Tratamento Robusto de Exceções",
+    description="API FastAPI com sistema completo de tratamento de erros",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
+
+# Configurar CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configurar apropriadamente em produção
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Adicionar middlewares customizados (ordem importa)
+app.add_middleware(ResponseFormattingMiddleware)
+app.add_middleware(CorrelationMiddleware)
+
+# Registrar exception handlers
+register_exception_handlers(app)
+
+# Registrar handlers HTTP específicos
+app.add_exception_handler(404, not_found_handler)
+app.add_exception_handler(405, method_not_allowed_handler)
+
+# Incluir routers
+app.include_router(api_router, prefix="/api/v1")
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Evento de inicialização."""
+    logger.info("🚀 Aplicação iniciada com sistema de exceções configurado")
+    logger.info("📝 Documentação disponível em: /docs")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Evento de encerramento."""
+    logger.info("👋 Encerrando aplicação")
+
+
+@app.get("/health")
+async def health_check():
+    """Endpoint de health check."""
+    return {
+        "status": "healthy",
+        "version": app.version
+    }
+
+
+# Exemplo de uso em endpoint
+@app.get("/example")
+async def example_endpoint():
+    """Exemplo de endpoint que pode lançar exceções."""
+    from src.api.core.exceptions.business import UserNotFoundError
+    
+    # Exemplo de lançamento de exceção customizada
+    # raise UserNotFoundError(user_id="123")
+    
+    return {"message": "Endpoint de exemplo"}
+```
+
+### 📋 **Arquivo __init__.py para Exportações**
+
+```python
+# src/api/core/exceptions/__init__.py
+"""Exporta todas as exceções customizadas."""
+
+from .base import (
+    AppException,
+    NotFoundError,
+    ConflictError,
+    ValidationError,
+    PermissionDeniedError,
+    RateLimitExceededError,
+    ServiceUnavailableError
+)
+
+from .auth import (
+    AuthenticationError,
+    InvalidCredentialsError,
+    TokenExpiredError,
+    TokenInvalidError,
+    TokenRevokedError,
+    InsufficientPermissionsError,
+    AccountLockedError,
+    AccountInactiveError,
+    InvalidRefreshTokenError,
+    MFARequiredError,
+    InvalidMFACodeError
+)
+
+from .business import (
+    UserNotFoundError,
+    UserAlreadyExistsError,
+    ProductNotFoundError,
+    InsufficientStockError,
+    InvalidOrderStatusError,
+    PaymentFailedError,
+    QuotaExceededError,
+    InvalidBusinessRuleError,
+    ResourceLockError
+)
+
+from .validation import (
+    InvalidInputError,
+    InvalidEmailFormatError,
+    InvalidDateRangeError,
+    MissingRequiredFieldError,
+    InvalidFileTypeError,
+    FileTooLargeError,
+    InvalidEnumValueError,
+    ValidationGroupError
+)
+
+from .external import (
+    ExternalServiceError,
+    ExternalAPIError,
+    ExternalAPITimeoutError,
+    PaymentGatewayError,
+    EmailServiceError,
+    StorageServiceError,
+    DatabaseConnectionError,
+    CacheServiceError
+)
+
+__all__ = [
+    # Base
+    "AppException",
+    "NotFoundError",
+    "ConflictError",
+    "ValidationError",
+    "PermissionDeniedError",
+    "RateLimitExceededError",
+    "ServiceUnavailableError",
+    
+    # Auth
+    "AuthenticationError",
+    "InvalidCredentialsError",
+    "TokenExpiredError",
+    "TokenInvalidError",
+    "TokenRevokedError",
+    "InsufficientPermissionsError",
+    "AccountLockedError",
+    "AccountInactiveError",
+    "InvalidRefreshTokenError",
+    "MFARequiredError",
+    "InvalidMFACodeError",
+    
+    # Business
+    "UserNotFoundError",
+    "UserAlreadyExistsError",
+    "ProductNotFoundError",
+    "InsufficientStockError",
+    "InvalidOrderStatusError",
+    "PaymentFailedError",
+    "QuotaExceededError",
+    "InvalidBusinessRuleError",
+    "ResourceLockError",
+    
+    # Validation
+    "InvalidInputError",
+    "InvalidEmailFormatError",
+    "InvalidDateRangeError",
+    "MissingRequiredFieldError",
+    "InvalidFileTypeError",
+    "FileTooLargeError",
+    "InvalidEnumValueError",
+    "ValidationGroupError",
+    
+    # External
+    "ExternalServiceError",
+    "ExternalAPIError",
+    "ExternalAPITimeoutError",
+    "PaymentGatewayError",
+    "EmailServiceError",
+    "StorageServiceError",
+    "DatabaseConnectionError",
+    "CacheServiceError",
+]
+```
+
+## 8. Boas Práticas
+
+### ✅ **Checklist de Boas Práticas Recomendadas**
+
+```python
+# ✅ Use exceções específicas por tipo de erro
+from src.api.core.exceptions import UserNotFoundError
+
+raise UserNotFoundError(user_id="123")  # Específica e clara
+
+
+# ✅ Sempre forneça contexto útil nas exceções
+raise InvalidOrderStatusError(
+    current_status="delivered",
+    attempted_status="pending",
+    allowed_transitions=["cancelled"]
+)
+
+
+# ✅ Use hierarquia de exceções para organização
+class AppException(Exception):  # Base
+    pass
+
+class AuthenticationError(AppException):  # Domínio
+    pass
+
+class TokenExpiredError(AuthenticationError):  # Específica
+    pass
+
+
+# ✅ Inclua detalhes relevantes sem expor dados sensíveis
+raise UserNotFoundError(user_id="123")  # ✅ Inclui ID
+# NÃO: raise UserNotFoundError(password="secret123")  # ❌ Expõe senha
+
+
+# ✅ Use status codes HTTP apropriados
+raise AppException(
+    message="Usuário não encontrado",
+    error_code="USER_NOT_FOUND",
+    status_code=404  # Status correto para recurso não encontrado
+)
+
+
+# ✅ Implemente to_dict() para serialização consistente
+class AppException(Exception):
+    def to_dict(self) -> dict:
+        return {
+            "error": {
+                "message": self.message,
+                "code": self.error_code,
+                "timestamp": self.timestamp.isoformat()
+            }
+        }
+
+
+# ✅ Use request_id para rastreabilidade
+from src.api.core.context import get_request_id
+
+logger.error(
+    f"Error processing payment",
+    extra={"request_id": get_request_id()}
+)
+
+
+# ✅ Log com níveis apropriados
+logger.debug("Processing request")  # Detalhes de debug
+logger.info("User created successfully")  # Operações normais
+logger.warning("Rate limit approaching")  # Avisos
+logger.error("Database connection failed")  # Erros
+logger.critical("System out of memory")  # Crítico
+
+
+# ✅ Capture exceções específicas primeiro
+try:
+    result = await process_payment()
+except PaymentGatewayError as e:  # Específica primeiro
+    handle_payment_error(e)
+except ExternalServiceError as e:  # Mais genérica depois
+    handle_external_error(e)
+except Exception as e:  # Genérica por último
+    handle_generic_error(e)
+
+
+# ✅ Use context managers para cleanup automático
+try:
+    db = get_database_connection()
+    result = db.execute(query)
+finally:
+    db.close()  # Garante cleanup
+
+
+# ✅ Implemente retry com backoff exponencial
+from src.api.core.handlers.async_handlers import retry_on_exception
+
+@retry_on_exception(max_retries=3, delay=1.0, backoff=2.0)
+async def call_external_api():
+    return await api_client.get("/data")
+
+
+# ✅ Use timeouts em operações externas
+from src.api.core.handlers.async_handlers import handle_async_timeout
+
+@handle_async_timeout(timeout=30.0, service_name="Payment API")
+async def process_payment():
+    return await payment_api.charge(amount)
+
+
+# ✅ Documente exceções que sua função pode lançar
+async def create_user(email: str) -> User:
+    """
+    Cria um novo usuário.
+    
+    Args:
+        email: Email do usuário
+    
+    Returns:
+        User criado
+    
+    Raises:
+        UserAlreadyExistsError: Se email já está cadastrado
+        InvalidEmailFormatError: Se formato de email é inválido
+        DatabaseConnectionError: Se falhar conexão com BD
+    """
+    pass
+
+
+# ✅ Use exceções para fluxo excepcional, não para controle de fluxo
+# ✅ CORRETO
+user = await get_user(user_id)
+if not user:
+    raise UserNotFoundError(user_id)
+
+# ❌ INCORRETO - usando exceção para fluxo normal
+try:
+    user = users[user_id]
+except KeyError:
+    user = None  # Exceção usada como controle de fluxo
+
+
+# ✅ Crie error codes padronizados e documentados
+class ErrorCodes:
+    """Códigos de erro padronizados da aplicação."""
+    
+    USER_NOT_FOUND = "USER_NOT_FOUND"
+    INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
+    TOKEN_EXPIRED = "TOKEN_EXPIRED"
+    # ... outros códigos
+
+
+# ✅ Use middleware para adicionar contexto automaticamente
+from src.api.core.middleware.correlation_middleware import CorrelationMiddleware
+
+app.add_middleware(CorrelationMiddleware)
+
+
+# ✅ Formate respostas de erro consistentemente
+from src.api.core.responses.error_responses import ErrorResponseBuilder
+
+response = ErrorResponseBuilder.build_error_response(
+    message="Recurso não encontrado",
+    error_code="RESOURCE_NOT_FOUND",
+    status_code=404,
+    request_id=get_request_id()
+)
+
+
+# ✅ Implemente health checks que detectam problemas
+@app.get("/health")
+async def health_check():
+    try:
+        await db.execute("SELECT 1")
+        return {"status": "healthy", "database": "connected"}
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "database": "disconnected"}
+        )
+
+
+# ✅ Use decoradores para funcionalidades cross-cutting
+from src.api.core.decorators.context_decorator import with_context
+
+@with_context("create_user")
+async def create_user(data: UserCreate):
+    # Contexto adicionado automaticamente aos logs
+    pass
+
+
+# ✅ Valide dados de entrada cedo (fail-fast)
+async def create_order(items: List[OrderItem]):
+    # Validar primeiro
+    if not items:
+        raise ValidationError("Lista de itens não pode estar vazia")
+    
+    # Processar depois
+    return await process_order(items)
+
+
+# ✅ Mantenha exceções immutáveis após criação
+class AppException(Exception):
+    def __init__(self, message: str):
+        self._message = message  # Usar atributo privado
+    
+    @property
+    def message(self) -> str:
+        return self._message  # Apenas getter, sem setter
+
+
+# ✅ Use type hints para exceções
+from typing import NoReturn
+
+def always_fails() -> NoReturn:
+    """Função que sempre lança exceção."""
+    raise RuntimeError("This always fails")
+
+
+# ✅ Teste seus exception handlers
+import pytest
+from fastapi.testclient import TestClient
+
+def test_user_not_found_handler():
+    response = client.get("/users/invalid-id")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "USER_NOT_FOUND"
+
+
+# ✅ Use logging estruturado com contexto
+logger.error(
+    "Failed to create user",
+    extra={
+        "request_id": get_request_id(),
+        "user_email": email,
+        "error_code": "USER_CREATION_FAILED",
+        "timestamp": datetime.utcnow().isoformat()
+    }
+)
+```
+
+### ❌ **DON'Ts - Práticas a Evitar**
+
+```python
+# ❌ NÃO use exceções genéricas
+raise Exception("Algum erro aconteceu")  # Muito genérico
+
+
+# ❌ NÃO exponha detalhes internos em mensagens de erro
+raise Exception(f"Database error: {connection_string}")  # Expõe dados sensíveis
+
+
+# ❌ NÃO capture exceções sem fazer nada (silent failures)
+try:
+    result = dangerous_operation()
+except Exception:
+    pass  # Erro engolido sem log ou tratamento
+
+
+# ❌ NÃO use bare except
+try:
+    result = operation()
+except:  # Captura TUDO, inclusive KeyboardInterrupt
+    handle_error()
+
+
+# ❌ NÃO use exceções para controle de fluxo normal
+def get_user_age(user_id):
+    try:
+        return users[user_id].age
+    except KeyError:
+        return 0  # Usando exceção como if
+
+
+# ❌ NÃO retorne estruturas inconsistentes de erro
+# Endpoint 1
+return {"error": "Not found"}
+
+# Endpoint 2
+return {"message": "Error occurred", "status": "fail"}
+
+# Endpoint 3
+return {"detail": {"msg": "Something wrong"}}
+
+
+# ❌ NÃO ignore o status code HTTP
+raise HTTPException(
+    status_code=200,  # Status de sucesso para um erro!
+    detail="User not found"
+)
+
+
+# ❌ NÃO inclua stack traces em responses de produção
+return {
+    "error": str(exc),
+    "traceback": traceback.format_exc()  # Expõe estrutura interna
+}
+
+
+# ❌ NÃO crie exceções sem contexto útil
+raise ValueError("Invalid")  # Inválido o quê?
+
+
+# ❌ NÃO misture idiomas em mensagens de erro
+raise Exception("Usuário not found no database")  # Inconsistente
+
+
+# ❌ NÃO use strings mágicas para error codes
+if error_type == "notfound":  # Typo-prone, sem padronização
+    handle_not_found()
+
+
+# ❌ NÃO log informações sensíveis
+logger.error(f"Login failed for password: {password}")  # Expõe senha
+
+
+# ❌ NÃO crie exceções dentro de loops
+for item in items:
+    try:
+        process(item)
+    except Exception:
+        raise CustomError()  # Cria nova exceção a cada iteração
+
+
+# ❌ NÃO ignore exception chaining
+try:
+    operation()
+except Exception:
+    raise NewException()  # Perde contexto da exceção original
+
+# ✅ CORRETO
+try:
+    operation()
+except Exception as e:
+    raise NewException() from e  # Preserva contexto
+
+
+# ❌ NÃO use exceções para validação que deveria ser feita antes
+async def create_user(email: str):
+    try:
+        user = await db.create(email=email)
+    except IntegrityError:
+        raise UserAlreadyExistsError()  # Deveria verificar antes
+
+# ✅ CORRETO
+async def create_user(email: str):
+    existing = await db.get(email=email)
+    if existing:
+        raise UserAlreadyExistsError()
+    return await db.create(email=email)
+
+
+# ❌ NÃO re-raise exceções desnecessariamente
+try:
+    result = operation()
+except Exception as e:
+    logger.error(str(e))
+    raise e  # Desnecessário, pode só fazer raise
+
+# ✅ CORRETO
+try:
+    result = operation()
+except Exception as e:
+    logger.error(str(e))
+    raise  # Mais limpo
+
+
+# ❌ NÃO crie múltiplas exceções para o mesmo erro
+class UserNotFound(Exception): pass
+class UserDoesNotExist(Exception): pass
+class NoUserFound(Exception): pass  # Redundante
+
+
+# ❌ NÃO use assert para validação de entrada de usuário
+def create_user(email: str):
+    assert "@" in email  # Desabilitado com -O flag
+    # Usar validação explícita
+
+
+# ❌ NÃO ignore o contexto assíncrono
+def blocking_operation():  # Função síncrona
+    time.sleep(10)  # Bloqueia event loop
+
+# ✅ CORRETO
+async def async_operation():
+    await asyncio.sleep(10)  # Não bloqueia
+
+
+# ❌ NÃO crie exception handlers muito genéricos
+@app.exception_handler(Exception)
+async def handle_all(request, exc):
+    return JSONResponse({"error": "Error"})  # Muito genérico
+
+
+# ❌ NÃO esqueça de limpar recursos em caso de exceção
+file = open("data.txt")
+process(file)  # Se falhar, arquivo não fecha
+file.close()
+
+# ✅ CORRETO - use context manager
+with open("data.txt") as file:
+    process(file)  # Fecha automaticamente
+
+
+# ❌ NÃO retorne códigos de erro numéricos sem documentação
+return {"error_code": 1042}  # O que significa 1042?
+
+
+# ❌ NÃO use exceções para comunicação entre camadas
+# Service
+def get_user(user_id):
+    raise UserNotFoundFlag()  # Não é erro, é flag
+
+# ✅ CORRETO - use retorno None ou Optional
+def get_user(user_id) -> Optional[User]:
+    return None  # Indica não encontrado
+
+
+# ❌ NÃO crie hierarquias de exceção muito profundas
+class BaseError(Exception): pass
+class ServiceError(BaseError): pass
+class APIError(ServiceError): pass
+class HTTPError(APIError): pass
+class RequestError(HTTPError): pass
+class TimeoutError(RequestError): pass  # Muito profundo
+
+
+# ❌ NÃO log o mesmo erro múltiplas vezes
+try:
+    operation()
+except Exception as e:
+    logger.error(str(e))  # Log 1
+    handle_error(e)  # Função que também loga - Log 2
+    raise  # Handler global também loga - Log 3
+
+
+# ❌ NÃO retorne diferentes tipos de response para sucesso/erro
+# Sucesso: {"data": {...}}
+# Erro: "Error message"  # String ao invés de objeto
+
+
+# ❌ NÃO use exceções para representar estado de negócio
+if order.status == "pending":
+    raise OrderPendingException()  # Estado, não erro
+
+# ✅ CORRETO
+if order.status == "pending":
+    return {"status": "pending", "message": "Order awaiting processing"}
+```
+
+**Esta rule deve ser rigorosamente seguida em todos os projetos FastAPI da organização.**

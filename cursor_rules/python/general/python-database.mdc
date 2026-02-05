@@ -1,0 +1,1184 @@
+---
+Rule: python-database.mdc
+Description: Diretrizes para integração robusta com banco de dados Python, cobrindo SQLAlchemy, Motor(MongoDB), PostgreSQL, migrations e padrões de repositório.
+globs: ["**/database/**/*.py", "**/models/**/*.py", "**/repositories/**/*.py", "**/migrations/**/*.py", "**/*_model.py"]
+alwaysApply: false
+tags: ["fastapi", "api", "database", "sqlalchemy", "mongodb"]
+Author: Glauber Duma
+Created: 2026-01
+---
+
+# Python - Integração com banco de dados
+
+## 1. Objetivo
+
+Estabelecer padrões para integração robusta com banco de dados, garantindo:
+- **Abstração adequada** entre camada de dados e negócio
+- **Performance otimizada** com queries eficientes e cache
+- **Transações seguras** com rollback automático em caso de erros
+- **Migrations Controladas** para evolução do schema
+- **Testabilidade** com mocks e databases de teste
+
+---
+
+## 2. Arquitetura de Dados
+
+### 🗂️ **Estrutura de organização**
+
+```
+fastapi_project
+|---src/
+|.   |---database/
+|.   |     |---__init__.py
+|.   |     |---connection.py                              # Gerenciamento de conexões
+|.   |     |---session.py                                 # Gerenciamento de sessões
+|.   |     |---migrations/                                # Database migrations
+|.   |     |    |---__init__.py
+|.   |     |    |---env.py                               # Alembic environment
+|.   |     |    |---script.py.mako                       # Migration Template
+|.   |     |    |---versions/                            # Migration files
+|.   |     |---seed/                                     # Seed data
+|.   |          |---__init__.py
+|.   |          |---initial_data.py 
+|.   |---models/                                         # Domain models
+|.   |     |---__init__.py
+|.   |     |---base.py                                   # base model class
+|.   |     |---user.py                                   # User domain model
+|.   |     |---product.py                                # Product domain model
+|.   |     |---mixins.py                                 # Model mixins
+|.   |---repositories/                                   # Repository pattern
+|.   |     |---__init__.py
+|.   |     |---base.py                                   # base repository
+|.   |     |---user_repository.py                        # User data access
+|.   |     |---product_repository.py                     # Product data access
+|.   |     |---unit_of_work.py                           # Unit of Work pattern
+|.   |---core/
+|.        |---config.py                                   # database configuration
+.         |---database/
+.               |---__init__.py
+.               |---deps.py                               # FastAPI dependencies
+.               |---exceptions.py                         # Database exceptions
+.               |---utils.py                              # Database utilities
+
+```
+
+### 🔧 **Base database configuration**
+
+```Python
+# src/core/config.py
+"""
+Configuração de banco de dados
+"""
+from pydantic_settings import BaseSettings
+from typing import Optional
+
+
+class DatabaseConfig(BaseSettings):
+    """Configuração de banco de dados PostgreSQL."""
+    
+    # PostgreSQL
+    DB_HOST: str = "localhost"
+    DB_PORT: int = 5432
+    DB_USER: str = "postgres"
+    DB_PASSWORD: str = "postgres"
+    DB_NAME: str = "myapp"
+    DB_ECHO: bool = False
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_RECYCLE: int = 3600
+    
+    # MongoDB
+    MONGO_URL: str = "mongodb://localhost:27017"
+    MONGO_DB_NAME: str = "myapp"
+    MONGO_MAX_POOL_SIZE: int = 10
+    MONGO_MIN_POOL_SIZE: int = 1
+    
+    # Connection strings
+    @property
+    def postgres_url(self) -> str:
+        """URL de conexão PostgreSQL."""
+        return f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+    
+    @property
+    def postgres_url_sync(self) -> str:
+        """URL de conexão PostgreSQL síncrona (para migrations)."""
+        return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+    
+    class Config:
+        env_file = ".env"
+        case_sensitive = True
+
+
+# Instância global de configuração
+db_config = DatabaseConfig()
+
+```
+
+## 3. SQLAlchemy com PostgreSQL
+
+### ⚙️ **Setup Assíncrono**
+
+```Python
+# src/database/connection.py
+"""
+Gerenciamento de conexões assíncronas com SQLAlchemy
+"""
+from typing import AsyncGenerator
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    AsyncEngine,
+    create_async_engine,
+    async_sessionmaker
+)
+from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool, QueuePool
+from src.core.config import db_config
+
+
+class Base(DeclarativeBase):
+    """Base class para todos os models SQLAlchemy."""
+    pass
+
+
+class DatabaseManager:
+    """Gerenciador centralizado de conexões com banco de dados."""
+    
+    def __init__(self):
+        self._engine: AsyncEngine | None = None
+        self._session_factory: async_sessionmaker | None = None
+    
+    def init(self, database_url: str | None = None, echo: bool = False) -> None:
+        """Inicializa engine e session factory.
+        
+        Args:
+            database_url: URL de conexão (padrão: config)
+            echo: Habilita logging de queries SQL
+        """
+        url = database_url or db_config.postgres_url
+        
+        self._engine = create_async_engine(
+            url,
+            echo=echo or db_config.DB_ECHO,
+            pool_size=db_config.DB_POOL_SIZE,
+            max_overflow=db_config.DB_MAX_OVERFLOW,
+            pool_recycle=db_config.DB_POOL_RECYCLE,
+            poolclass=QueuePool,
+            # Configurações adicionais
+            pool_pre_ping=True,  # Verifica conexão antes de usar
+            connect_args={
+                "server_settings": {"jit": "off"}  # Performance para Postgres
+            }
+        )
+        
+        self._session_factory = async_sessionmaker(
+            self._engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autocommit=False,
+            autoflush=False
+        )
+    
+    async def close(self) -> None:
+        """Fecha todas as conexões do pool."""
+        if self._engine:
+            await self._engine.dispose()
+    
+    async def get_session(self) -> AsyncGenerator[AsyncSession, None]:
+        """Fornece sessão de banco de dados.
+        
+        Yields:
+            AsyncSession: Sessão de banco de dados
+        """
+        if not self._session_factory:
+            raise RuntimeError("DatabaseManager não foi inicializado. Chame init() primeiro.")
+        
+        async with self._session_factory() as session:
+            try:
+                yield session
+            except Exception:
+                await session.rollback()
+                raise
+            finally:
+                await session.close()
+    
+    @property
+    def engine(self) -> AsyncEngine:
+        """Retorna engine de banco de dados."""
+        if not self._engine:
+            raise RuntimeError("DatabaseManager não foi inicializado.")
+        return self._engine
+
+
+# Instância global
+db_manager = DatabaseManager()
+
+
+async def init_database():
+    """Inicializa banco de dados na startup da aplicação."""
+    db_manager.init()
+    
+    # Cria todas as tabelas (apenas em desenvolvimento)
+    # Em produção, use migrations (Alembic)
+    # async with db_manager.engine.begin() as conn:
+    #     await conn.run_sync(Base.metadata.create_all)
+
+
+async def close_database():
+    """Fecha conexões na shutdown da aplicação."""
+    await db_manager.close()
+
+```
+
+### 📄 **Base Models**
+
+```Python
+# src/models/base.py
+"""
+Models base e mixins para SQLAlchemy
+"""
+from datetime import datetime
+from typing import Any
+from sqlalchemy import Column, Integer, DateTime, Boolean, String, func
+from sqlalchemy.orm import declared_attr
+from src.database.connection import Base
+
+
+class TimestampMixin:
+    """Mixin para timestamps automáticos."""
+    
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        comment="Data de criação"
+    )
+    
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+        comment="Data de atualização"
+    )
+
+
+class SoftDeleteMixin:
+    """Mixin para soft delete."""
+    
+    deleted_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Data de exclusão (soft delete)"
+    )
+    
+    is_deleted = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        comment="Flag de exclusão"
+    )
+    
+    def soft_delete(self):
+        """Marca registro como deletado."""
+        self.is_deleted = True
+        self.deleted_at = datetime.utcnow()
+    
+    def restore(self):
+        """Restaura registro deletado."""
+        self.is_deleted = False
+        self.deleted_at = None
+
+
+class AuditMixin:
+    """Mixin para auditoria."""
+    
+    created_by = Column(String(100), nullable=True, comment="Usuário que criou")
+    updated_by = Column(String(100), nullable=True, comment="Usuário que atualizou")
+
+
+class BaseModel(Base, TimestampMixin):
+    """Model base com ID e timestamps."""
+    
+    __abstract__ = True
+    
+    id = Column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+        comment="Identificador único"
+    )
+    
+    @declared_attr
+    def __tablename__(cls) -> str:
+        """Gera nome da tabela automaticamente."""
+        return cls.__name__.lower()
+    
+    def to_dict(self) -> dict[str, Any]:
+        """Converte model para dicionário."""
+        return {
+            column.name: getattr(self, column.name)
+            for column in self.__table__.columns
+        }
+    
+    def __repr__(self) -> str:
+        """Representação string do model."""
+        return f"<{self.__class__.__name__}(id={self.id})>"
+
+
+# Exemplo de uso
+"""
+# src/models/user.py
+from sqlalchemy import Column, String, Boolean
+from sqlalchemy.orm import relationship
+from .base import BaseModel, SoftDeleteMixin, AuditMixin
+
+
+class User(BaseModel, SoftDeleteMixin, AuditMixin):
+    __tablename__ = "users"
+    
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    full_name = Column(String(255), nullable=False)
+    hashed_password = Column(String(255), nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_superuser = Column(Boolean, default=False, nullable=False)
+    
+    # Relacionamentos
+    # posts = relationship("Post", back_populates="author")
+"""
+
+```
+
+## 4. Repository Pattern
+
+### 🏭 **Base Repository**
+
+```Python
+# src/repositories/base.py
+"""
+Repository base com operações CRUD genéricas
+"""
+from typing import Generic, TypeVar, Type, Optional, List, Any
+from sqlalchemy import select, update, delete, func
+from sqlalchemy.ext.asyncio import AsyncSession
+from src.models.base import BaseModel
+
+ModelType = TypeVar("ModelType", bound=BaseModel)
+
+
+class BaseRepository(Generic[ModelType]):
+    """Repository base com operações CRUD."""
+    
+    def __init__(self, model: Type[ModelType], session: AsyncSession):
+        """
+        Args:
+            model: Classe do model SQLAlchemy
+            session: Sessão assíncrona do banco de dados
+        """
+        self.model = model
+        self.session = session
+    
+    async def create(self, **kwargs) -> ModelType:
+        """Cria novo registro.
+        
+        Args:
+            **kwargs: Campos do model
+            
+        Returns:
+            ModelType: Registro criado
+        """
+        instance = self.model(**kwargs)
+        self.session.add(instance)
+        await self.session.flush()
+        await self.session.refresh(instance)
+        return instance
+    
+    async def get(self, id: int) -> Optional[ModelType]:
+        """Busca registro por ID.
+        
+        Args:
+            id: ID do registro
+            
+        Returns:
+            Optional[ModelType]: Registro encontrado ou None
+        """
+        stmt = select(self.model).where(self.model.id == id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+    
+    async def get_or_fail(self, id: int) -> ModelType:
+        """Busca registro por ID ou lança exceção.
+        
+        Args:
+            id: ID do registro
+            
+        Returns:
+            ModelType: Registro encontrado
+            
+        Raises:
+            ValueError: Se registro não encontrado
+        """
+        instance = await self.get(id)
+        if not instance:
+            raise ValueError(f"{self.model.__name__} com id={id} não encontrado")
+        return instance
+    
+    async def get_all(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+        order_by: Any = None
+    ) -> List[ModelType]:
+        """Lista todos os registros com paginação.
+        
+        Args:
+            skip: Número de registros a pular
+            limit: Número máximo de registros
+            order_by: Campo para ordenação
+            
+        Returns:
+            List[ModelType]: Lista de registros
+        """
+        stmt = select(self.model).offset(skip).limit(limit)
+        
+        if order_by is not None:
+            stmt = stmt.order_by(order_by)
+        
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+    
+    async def update(self, id: int, **kwargs) -> Optional[ModelType]:
+        """Atualiza registro existente.
+        
+        Args:
+            id: ID do registro
+            **kwargs: Campos a atualizar
+            
+        Returns:
+            Optional[ModelType]: Registro atualizado ou None
+        """
+        stmt = (
+            update(self.model)
+            .where(self.model.id == id)
+            .values(**kwargs)
+            .returning(self.model)
+        )
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        return result.scalar_one_or_none()
+    
+    async def delete(self, id: int) -> bool:
+        """Remove registro permanentemente.
+        
+        Args:
+            id: ID do registro
+            
+        Returns:
+            bool: True se deletado, False se não encontrado
+        """
+        stmt = delete(self.model).where(self.model.id == id)
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        return result.rowcount > 0
+    
+    async def count(self, **filters) -> int:
+        """Conta total de registros.
+        
+        Args:
+            **filters: Filtros opcionais
+            
+        Returns:
+            int: Total de registros
+        """
+        stmt = select(func.count()).select_from(self.model)
+        
+        for key, value in filters.items():
+            stmt = stmt.where(getattr(self.model, key) == value)
+        
+        result = await self.session.execute(stmt)
+        return result.scalar_one()
+    
+    async def exists(self, **filters) -> bool:
+        """Verifica se registro existe.
+        
+        Args:
+            **filters: Filtros de busca
+            
+        Returns:
+            bool: True se existe
+        """
+        stmt = select(self.model)
+        
+        for key, value in filters.items():
+            stmt = stmt.where(getattr(self.model, key) == value)
+        
+        stmt = stmt.limit(1)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
+
+# Exemplo de repository específico
+"""
+# src/repositories/user_repository.py
+from sqlalchemy import select
+from .base import BaseRepository
+from src.models.user import User
+
+
+class UserRepository(BaseRepository[User]):
+    def __init__(self, session):
+        super().__init__(User, session)
+    
+    async def get_by_email(self, email: str) -> User | None:
+        stmt = select(User).where(User.email == email)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+    
+    async def get_active_users(self) -> list[User]:
+        stmt = select(User).where(User.is_active == True)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+"""
+
+```
+
+## 5. Unit Of Work
+
+### ♻️ **Transaction Management**
+
+```Python
+# src/repositories/unit_of_work.py
+"""
+Unit of Work para gerenciamento transacional
+"""
+from typing import Optional
+from sqlalchemy.ext.asyncio import AsyncSession
+from src.database.connection import db_manager
+from src.repositories.user_repository import UserRepository
+
+
+class UnitOfWork:
+    """Unit of Work para gerenciar transações e repositories."""
+    
+    def __init__(self, session: Optional[AsyncSession] = None):
+        """
+        Args:
+            session: Sessão SQLAlchemy (opcional, cria nova se não fornecida)
+        """
+        self._session = session
+        self._own_session = session is None
+        
+        # Repositories (lazy initialization)
+        self._user_repo: Optional[UserRepository] = None
+    
+    async def __aenter__(self):
+        """Inicia contexto do Unit of Work."""
+        if self._own_session:
+            # Cria nova sessão se não foi fornecida
+            session_gen = db_manager.get_session()
+            self._session = await session_gen.__anext__()
+        
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Finaliza contexto do Unit of Work."""
+        if exc_type:
+            # Rollback em caso de exceção
+            await self.rollback()
+        
+        if self._own_session and self._session:
+            # Fecha sessão se foi criada aqui
+            await self._session.close()
+    
+    @property
+    def session(self) -> AsyncSession:
+        """Retorna sessão ativa."""
+        if not self._session:
+            raise RuntimeError("UnitOfWork não foi inicializado em um contexto async")
+        return self._session
+    
+    @property
+    def users(self) -> UserRepository:
+        """Repository de usuários (lazy loading)."""
+        if not self._user_repo:
+            self._user_repo = UserRepository(self.session)
+        return self._user_repo
+    
+    # Adicione outros repositories aqui
+    # @property
+    # def products(self) -> ProductRepository:
+    #     ...
+    
+    async def commit(self) -> None:
+        """Comita transação."""
+        await self.session.commit()
+    
+    async def rollback(self) -> None:
+        """Reverte transação."""
+        await self.session.rollback()
+    
+    async def flush(self) -> None:
+        """Faz flush sem commit."""
+        await self.session.flush()
+
+
+# Exemplo de uso
+"""
+async def create_user_with_profile(email: str, name: str):
+    async with UnitOfWork() as uow:
+        try:
+            # Cria usuário
+            user = await uow.users.create(email=email, full_name=name)
+            
+            # Outras operações no mesmo contexto transacional
+            # profile = await uow.profiles.create(user_id=user.id, ...)
+            
+            # Comita tudo junto
+            await uow.commit()
+            return user
+        except Exception as e:
+            # Rollback automático no __aexit__
+            raise
+"""
+
+```
+
+## 6. MongoDB com Motor
+
+### 🍃 **Setup Assíncrono do MongoDB**
+
+```Python
+# src/database/mongodb.py
+"""
+Configuração do MongoDB com Motor (driver assíncrono)
+"""
+from typing import Optional
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from pymongo.errors import ConnectionFailure
+from src.core.config import db_config
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class MongoDBManager:
+    """Gerenciador de conexões MongoDB."""
+    
+    def __init__(self):
+        self._client: Optional[AsyncIOMotorClient] = None
+        self._db: Optional[AsyncIOMotorDatabase] = None
+    
+    def init(self, mongo_url: str | None = None, db_name: str | None = None):
+        """Inicializa cliente MongoDB.
+        
+        Args:
+            mongo_url: URL de conexão MongoDB
+            db_name: Nome do banco de dados
+        """
+        url = mongo_url or db_config.MONGO_URL
+        database_name = db_name or db_config.MONGO_DB_NAME
+        
+        self._client = AsyncIOMotorClient(
+            url,
+            maxPoolSize=db_config.MONGO_MAX_POOL_SIZE,
+            minPoolSize=db_config.MONGO_MIN_POOL_SIZE,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=10000,
+        )
+        
+        self._db = self._client[database_name]
+        logger.info(f"MongoDB conectado: {database_name}")
+    
+    @property
+    def database(self) -> AsyncIOMotorDatabase:
+        """Retorna database MongoDB."""
+        if not self._db:
+            raise RuntimeError("MongoDB não foi inicializado. Chame init() primeiro.")
+        return self._db
+    
+    @property
+    def client(self) -> AsyncIOMotorClient:
+        """Retorna cliente MongoDB."""
+        if not self._client:
+            raise RuntimeError("MongoDB não foi inicializado.")
+        return self._client
+    
+    async def ping(self) -> bool:
+        """Verifica conectividade com MongoDB.
+        
+        Returns:
+            bool: True se conectado
+        """
+        try:
+            await self._client.admin.command('ping')
+            return True
+        except ConnectionFailure:
+            return False
+    
+    async def close(self):
+        """Fecha conexão MongoDB."""
+        if self._client:
+            self._client.close()
+            logger.info("MongoDB desconectado")
+
+
+# Instância global
+mongo_manager = MongoDBManager()
+
+
+async def init_mongodb():
+    """Inicializa MongoDB na startup."""
+    mongo_manager.init()
+    
+    # Verifica conectividade
+    is_connected = await mongo_manager.ping()
+    if not is_connected:
+        logger.error("Falha ao conectar com MongoDB")
+
+
+async def close_mongodb():
+    """Fecha MongoDB na shutdown."""
+    await mongo_manager.close()
+
+
+# Repository base para MongoDB
+class MongoRepository:
+    """Repository base para coleções MongoDB."""
+    
+    def __init__(self, collection_name: str):
+        self.collection_name = collection_name
+    
+    @property
+    def collection(self):
+        """Retorna coleção MongoDB."""
+        return mongo_manager.database[self.collection_name]
+    
+    async def create(self, document: dict) -> str:
+        """Insere documento.
+        
+        Args:
+            document: Documento a inserir
+            
+        Returns:
+            str: ID do documento inserido
+        """
+        result = await self.collection.insert_one(document)
+        return str(result.inserted_id)
+    
+    async def find_one(self, filter: dict) -> Optional[dict]:
+        """Busca um documento.
+        
+        Args:
+            filter: Filtro de busca
+            
+        Returns:
+            Optional[dict]: Documento encontrado ou None
+        """
+        return await self.collection.find_one(filter)
+    
+    async def find_many(self, filter: dict, skip: int = 0, limit: int = 100) -> list[dict]:
+        """Busca múltiplos documentos.
+        
+        Args:
+            filter: Filtro de busca
+            skip: Documentos a pular
+            limit: Limite de documentos
+            
+        Returns:
+            list[dict]: Lista de documentos
+        """
+        cursor = self.collection.find(filter).skip(skip).limit(limit)
+        return await cursor.to_list(length=limit)
+    
+    async def update_one(self, filter: dict, update: dict) -> bool:
+        """Atualiza um documento.
+        
+        Args:
+            filter: Filtro de busca
+            update: Operações de update
+            
+        Returns:
+            bool: True se atualizado
+        """
+        result = await self.collection.update_one(filter, {"$set": update})
+        return result.modified_count > 0
+    
+    async def delete_one(self, filter: dict) -> bool:
+        """Remove um documento.
+        
+        Args:
+            filter: Filtro de busca
+            
+        Returns:
+            bool: True se removido
+        """
+        result = await self.collection.delete_one(filter)
+        return result.deleted_count > 0
+    
+    async def count(self, filter: dict) -> int:
+        """Conta documentos.
+        
+        Args:
+            filter: Filtro de busca
+            
+        Returns:
+            int: Número de documentos
+        """
+        return await self.collection.count_documents(filter)
+
+```
+
+## 7. FastAPI Dependencies
+
+### 📎 **Database Dependencies**
+
+```Python
+# src/core/database/deps.py
+"""
+Dependencies do FastAPI para injeção de dependência de database
+"""
+from typing import AsyncGenerator
+from fastapi import Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from src.database.connection import db_manager
+from src.repositories.unit_of_work import UnitOfWork
+from src.repositories.user_repository import UserRepository
+
+
+async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
+    """Dependency para obter sessão de banco de dados.
+    
+    Yields:
+        AsyncSession: Sessão de banco de dados
+        
+    Example:
+        @app.get("/users/{user_id}")
+        async def get_user(
+            user_id: int,
+            db: AsyncSession = Depends(get_db_session)
+        ):
+            ...
+    """
+    async for session in db_manager.get_session():
+        yield session
+
+
+async def get_uow() -> AsyncGenerator[UnitOfWork, None]:
+    """Dependency para obter Unit of Work.
+    
+    Yields:
+        UnitOfWork: Instância do Unit of Work
+        
+    Example:
+        @app.post("/users")
+        async def create_user(
+            data: UserCreate,
+            uow: UnitOfWork = Depends(get_uow)
+        ):
+            async with uow:
+                user = await uow.users.create(**data.dict())
+                await uow.commit()
+                return user
+    """
+    async with UnitOfWork() as uow:
+        yield uow
+
+
+def get_user_repository(
+    session: AsyncSession = Depends(get_db_session)
+) -> UserRepository:
+    """Dependency para obter UserRepository.
+    
+    Args:
+        session: Sessão de banco de dados
+        
+    Returns:
+        UserRepository: Instância do repository
+        
+    Example:
+        @app.get("/users/{user_id}")
+        async def get_user(
+            user_id: int,
+            repo: UserRepository = Depends(get_user_repository)
+        ):
+            return await repo.get(user_id)
+    """
+    return UserRepository(session)
+
+
+# Exemplo de dependency composta
+async def get_current_user_from_db(
+    user_id: int,
+    repo: UserRepository = Depends(get_user_repository)
+):
+    """Dependency que busca usuário atual do database.
+    
+    Args:
+        user_id: ID do usuário (extraído do token JWT)
+        repo: Repository de usuários
+        
+    Returns:
+        User: Usuário autenticado
+        
+    Raises:
+        HTTPException: Se usuário não encontrado
+    """
+    from fastapi import HTTPException, status
+    
+    user = await repo.get(user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Usuário não encontrado"
+        )
+    
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Usuário inativo"
+        )
+    
+    return user
+
+```
+
+## 8. Boas práticas
+
+### ✅ **DO`s - Práticas Recomendadas**
+
+```Python
+# ✅ Use async/await para operações de banco de dados
+async def get_user(user_id: int, session: AsyncSession):
+    """Sempre use async/await para operações de I/O."""
+    stmt = select(User).where(User.id == user_id)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+# ✅ Implemente soft delete quando apropriado
+class User(BaseModel, SoftDeleteMixin):
+    pass
+
+async def delete_user(user_id: int, session: AsyncSession):
+    """Soft delete preserva dados para auditoria."""
+    user = await session.get(User, user_id)
+    user.soft_delete()
+    await session.commit()
+
+
+# ✅ Use repository pattern para abstração
+class UserService:
+    def __init__(self, user_repo: UserRepository):
+        self.repo = user_repo
+    
+    async def create_user(self, email: str, name: str):
+        # Lógica de negócio separada do acesso a dados
+        return await self.repo.create(email=email, full_name=name)
+
+
+# ✅ Gerencie transações com Unit of Work
+async def transfer_funds(from_account: int, to_account: int, amount: float):
+    """Unit of Work garante atomicidade."""
+    async with UnitOfWork() as uow:
+        # Múltiplas operações na mesma transação
+        await uow.accounts.debit(from_account, amount)
+        await uow.accounts.credit(to_account, amount)
+        await uow.commit()
+
+
+# ✅ Use indexação adequada
+class User(BaseModel):
+    __tablename__ = "users"
+    
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    username = Column(String(100), unique=True, index=True)
+    
+    __table_args__ = (
+        # Índice composto para queries frequentes
+        Index('idx_user_active_created', 'is_active', 'created_at'),
+    )
+
+
+# ✅ Valide entrada antes de salvar no database
+from pydantic import BaseModel, EmailStr
+
+class UserCreate(BaseModel):
+    email: EmailStr
+    full_name: str
+
+async def create_user(data: UserCreate, repo: UserRepository):
+    # Pydantic já validou os dados
+    user = await repo.create(**data.dict())
+    return user
+
+
+# ✅ Use eager loading para evitar N+1
+from sqlalchemy.orm import selectinload
+
+async def get_users_with_posts(session: AsyncSession):
+    """Carrega posts junto com users em uma query."""
+    stmt = select(User).options(selectinload(User.posts))
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+
+# ✅ Use transações explícitas quando necessário
+async def complex_operation(session: AsyncSession):
+    async with session.begin():
+        # Operações serão commitadas automaticamente
+        user = User(email="test@example.com")
+        session.add(user)
+        # Mais operações...
+    # Commit automático aqui
+
+
+# ✅ Implemente paginação em queries grandes
+async def get_paginated_users(
+    session: AsyncSession,
+    page: int = 1,
+    page_size: int = 20
+):
+    skip = (page - 1) * page_size
+    stmt = select(User).offset(skip).limit(page_size)
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+```
+
+### ❌ **DONT`s - Práticas a Evitar**
+
+```Python
+# ❌ Não use operações síncronas
+def bad_get_user(user_id: int, session):
+    # Bloqueia thread!
+    user = session.query(User).filter(User.id == user_id).first()
+    return user
+
+# ✅ Use async/await
+async def good_get_user(user_id: int, session: AsyncSession):
+    stmt = select(User).where(User.id == user_id)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+# ❌ Não deixe conexões abertas
+async def bad_database_usage():
+    session = await db_manager.get_session().__anext__()
+    user = await session.get(User, 1)
+    # Sessão nunca fechada!
+    return user
+
+# ✅ Use context manager
+async def good_database_usage():
+    async for session in db_manager.get_session():
+        user = await session.get(User, 1)
+        return user
+
+
+# ❌ Não ignore transações
+async def bad_multiple_operations(session: AsyncSession):
+    user = User(email="test@example.com")
+    session.add(user)
+    # Faltou commit! Mudanças podem ser perdidas
+    
+    profile = Profile(user_id=user.id)
+    session.add(profile)
+    # Sem transação, operações podem ficar inconsistentes
+
+# ✅ Use transações adequadamente
+async def good_multiple_operations(session: AsyncSession):
+    async with session.begin():
+        user = User(email="test@example.com")
+        session.add(user)
+        
+        profile = Profile(user_id=user.id)
+        session.add(profile)
+    # Commit automático ou rollback em caso de erro
+
+
+# ❌ Não faça queries N+1
+async def bad_get_users_with_posts(session: AsyncSession):
+    users = await session.execute(select(User))
+    result = []
+    for user in users.scalars():
+        # Query adicional para cada usuário! N+1 problem
+        posts = await session.execute(
+            select(Post).where(Post.user_id == user.id)
+        )
+        user.posts = posts.scalars().all()
+        result.append(user)
+    return result
+
+# ✅ Use eager loading
+from sqlalchemy.orm import selectinload
+
+async def good_get_users_with_posts(session: AsyncSession):
+    stmt = select(User).options(selectinload(User.posts))
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+
+# ❌ Não use SQL hardcoded desnecessariamente
+async def bad_get_active_users(session: AsyncSession):
+    # SQL string dificulta manutenção e é inseguro
+    result = await session.execute(
+        "SELECT * FROM users WHERE is_active = true"
+    )
+    return result.fetchall()
+
+# ✅ Use SQLAlchemy ORM
+async def good_get_active_users(session: AsyncSession):
+    stmt = select(User).where(User.is_active == True)
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+
+# ❌ Não exponha models de database diretamente
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get("/users/{user_id}")
+async def bad_get_user(user_id: int, session: AsyncSession = Depends(get_db_session)):
+    # Retorna model diretamente - expõe campos internos!
+    user = await session.get(User, user_id)
+    return user  # NUNCA! Pode expor hashed_password, etc.
+
+# ✅ Use schemas Pydantic para response
+from pydantic import BaseModel
+
+class UserResponse(BaseModel):
+    id: int
+    email: str
+    full_name: str
+    
+    class Config:
+        from_attributes = True
+
+@router.get("/users/{user_id}", response_model=UserResponse)
+async def good_get_user(user_id: int, session: AsyncSession = Depends(get_db_session)):
+    user = await session.get(User, user_id)
+    return user  # OK - FastAPI usa response_model para filtrar
+
+
+# ❌ Não crie índices desnecessários
+class BadIndexedModel(BaseModel):
+    id = Column(Integer, primary_key=True)
+    # Índices em todos os campos - overhead desnecessário!
+    field1 = Column(String, index=True)
+    field2 = Column(String, index=True)
+    field3 = Column(String, index=True)
+    rarely_queried = Column(String, index=True)  # Desperdício!
+
+# ✅ Indexe apenas campos frequentemente consultados
+class GoodIndexedModel(BaseModel):
+    id = Column(Integer, primary_key=True)
+    email = Column(String, unique=True, index=True)  # Consulta frequente
+    username = Column(String, unique=True, index=True)  # Consulta frequente
+    bio = Column(Text)  # Sem índice - raramente consultado
+
+```
+
+---
+
+Esta regra estabelece padrões sólidos para integração com banco de dados em aplicações Python/FastAPI, garantindo código limpo, performático e manutenível.

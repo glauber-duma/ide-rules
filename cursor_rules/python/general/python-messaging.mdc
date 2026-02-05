@@ -1,0 +1,2995 @@
+---
+Rule: python-messaging.mdc
+Description: Diretrizes para implementação de mensageria e eventos em Python, cobrindo Kafka, RabbitMQ, padrões pub/sub e processamento assíncrono.
+globs: ["**/messaging/**/*.py", "**/events/**/*.py", "**/kafka/**/*.py", "**/rabbitmq/**/*.py", "**/publishers/**/*.py", "**/consumers/**/*.py"]
+alwaysApply: false
+tags: ["fastapi", "api", "messaging", "rabbitmq","kafka"]
+Author: Glauber Duma
+Created: 2026-01
+---
+
+# Python - Mensageria e Eventos
+
+## 1. Objetivo
+
+Estabelecer padrões para implementação robusta de mensageria e processamento de eventos, garantindo:
+- **Comunicação Assíncrona** confiável entre serviços
+- **Processamento de Eventos** escalável e resiliente
+- **Padrões Pub/Sub** bem estruturados
+- **Tratamento de Falhas** com retry e dead letter queues
+- **Monitoramento** e observabilidade de mensagens
+
+---
+
+## 2. Arquitetura de Mensageria
+
+### 🗂️ **Estrutura de organização**
+
+```
+fastapi_project
+|---src/
+|.   |---messaging/
+|.   |     |---__init__.py
+|.   |     |---interface.py                              # Interface abstrata
+|.   |     |---brokers/                                  # Implementação de brokers
+|.   |     |    |---__init__.py
+|.   |     |    |---memory.py                            # In-memory broker (testes)
+|.   |     |.   |---kafka/ 
+|.   |     |.   |    |---producer.py                     # kafka producer
+|.   |     |    |.   |---consumer.py                     # kafka consumer
+|.   |     |    |.   |---admin.py                        # kafka admin
+|.   |     |.   |---rabbitmq/ 
+|.   |     |.   |    |---producer.py                     # rabbitmq producer
+|.   |     |    |.   |---consumer.py                     # rabbitmq consumer
+|.   |     |    |.   |---admin.py                        # rabbitmq admin
+|.   |     |.   |---azuresb/ 
+|.   |     |.   |    |---producer.py                     # azure service bus producer
+|.   |     |    |.   |---consumer.py                     # azure service bus consumer
+|.   |     |    |.   |---admin.py                        # azure service bus admin
+|.   |     |.   |---eventhub/ 
+|.   |     |.        |---producer.py                     # azure event hub producer
+|.   |     |     .   |---consumer.py                     # azure event hub consumer
+|.   |     |     .   |---admin.py                        # azure event hub admin
+|.   |     |---events/                                   # definição de eventos
+|.   |     |    |---__init__.py
+|.   |     |    |---base.py                              # Event base class
+|.   |     |    |---user_events.py                       # User domain events
+|.   |     |    |---order_events.py                      # Order domain events
+|.   |     |    |---system_events.py                     # System events
+|.   |     |---handlers/                                 # definição de eventos
+|.   |     |    |---__init__.py
+|.   |     |    |---base.py                              # base handler
+|.   |     |    |---user_handler.py                      
+|.   |     |    |---notification_handler.py                      
+|.   |     |---serialization.py                          # message serialization
+|.   |     |---routing.py                                # message routing
+|.   |     |---retry.py                                  # retry mechanisms
+|.   |     |---monitoring.py                             # metrics and monitoring
+|.   |---core/
+|.   |     |---messaging/                                 
+|.   |     |    |---__init__.py
+|.   |     |    |---config.py                            # messaging configuration
+|.   |     |    |---dependencies.py                      # FastAPI dependencies
+|.   |     |    |---middleware.py                        # messaging middleware
+|.   |     |---events/                                 
+|.   |          |---__init__.py
+|.   |          |---dispatcher.py                        # event dispatcher
+|.   |          |---registry.py                          # handler registry
+|.   |---business/
+|.   |     |---services/
+ .              |---event_service.py                     # business event service
+```
+
+### ⚙️ **Messaging Configuration**
+
+```python
+# src/core/messaging/config.py
+"""
+Configuração de mensageria.
+"""
+from enum import Enum
+from typing import Optional
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class BrokerType(str, Enum):
+    """Tipos de brokers suportados."""
+    
+    KAFKA = "kafka"
+    RABBITMQ = "rabbitmq"
+    AZURE_SERVICE_BUS = "azure_service_bus"
+    AZURE_EVENT_HUB = "azure_event_hub"
+    MEMORY = "memory"
+
+
+class MessagingSettings(BaseSettings):
+    """Configurações de mensageria."""
+    
+    model_config = SettingsConfigDict(
+        env_prefix="MESSAGING_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore"
+    )
+    
+    # Configuração geral
+    broker_type: BrokerType = Field(
+        default=BrokerType.KAFKA,
+        description="Tipo de broker a ser utilizado"
+    )
+    
+    enable_monitoring: bool = Field(
+        default=True,
+        description="Habilitar monitoramento de mensagens"
+    )
+    
+    enable_tracing: bool = Field(
+        default=True,
+        description="Habilitar tracing distribuído"
+    )
+    
+    # Kafka Configuration
+    kafka_bootstrap_servers: str = Field(
+        default="localhost:9092",
+        description="Kafka bootstrap servers"
+    )
+    
+    kafka_group_id: str = Field(
+        default="fastapi-service",
+        description="Consumer group ID"
+    )
+    
+    kafka_auto_offset_reset: str = Field(
+        default="earliest",
+        description="Auto offset reset strategy"
+    )
+    
+    kafka_enable_idempotence: bool = Field(
+        default=True,
+        description="Habilitar produção idempotente"
+    )
+    
+    kafka_max_in_flight_requests: int = Field(
+        default=5,
+        description="Máximo de requests in-flight"
+    )
+    
+    kafka_compression_type: str = Field(
+        default="lz4",
+        description="Tipo de compressão (none, gzip, snappy, lz4, zstd)"
+    )
+    
+    kafka_security_protocol: str = Field(
+        default="PLAINTEXT",
+        description="Protocolo de segurança (PLAINTEXT, SSL, SASL_PLAINTEXT, SASL_SSL)"
+    )
+    
+    kafka_sasl_mechanism: Optional[str] = Field(
+        default=None,
+        description="Mecanismo SASL (PLAIN, SCRAM-SHA-256, SCRAM-SHA-512)"
+    )
+    
+    kafka_sasl_username: Optional[str] = Field(
+        default=None,
+        description="Username para autenticação SASL"
+    )
+    
+    kafka_sasl_password: Optional[str] = Field(
+        default=None,
+        description="Password para autenticação SASL"
+    )
+    
+    # RabbitMQ Configuration
+    rabbitmq_host: str = Field(
+        default="localhost",
+        description="RabbitMQ host"
+    )
+    
+    rabbitmq_port: int = Field(
+        default=5672,
+        description="RabbitMQ port"
+    )
+    
+    rabbitmq_username: str = Field(
+        default="guest",
+        description="RabbitMQ username"
+    )
+    
+    rabbitmq_password: str = Field(
+        default="guest",
+        description="RabbitMQ password"
+    )
+    
+    rabbitmq_virtual_host: str = Field(
+        default="/",
+        description="RabbitMQ virtual host"
+    )
+    
+    rabbitmq_exchange: str = Field(
+        default="events",
+        description="RabbitMQ exchange padrão"
+    )
+    
+    rabbitmq_exchange_type: str = Field(
+        default="topic",
+        description="Tipo de exchange (direct, topic, fanout, headers)"
+    )
+    
+    rabbitmq_prefetch_count: int = Field(
+        default=10,
+        description="Número de mensagens para prefetch"
+    )
+    
+    # Azure Service Bus Configuration
+    azure_service_bus_connection_string: Optional[str] = Field(
+        default=None,
+        description="Azure Service Bus connection string"
+    )
+    
+    azure_service_bus_queue_name: Optional[str] = Field(
+        default=None,
+        description="Azure Service Bus queue name"
+    )
+    
+    azure_service_bus_topic_name: Optional[str] = Field(
+        default=None,
+        description="Azure Service Bus topic name"
+    )
+    
+    # Azure Event Hub Configuration
+    azure_event_hub_connection_string: Optional[str] = Field(
+        default=None,
+        description="Azure Event Hub connection string"
+    )
+    
+    azure_event_hub_name: Optional[str] = Field(
+        default=None,
+        description="Azure Event Hub name"
+    )
+    
+    azure_event_hub_consumer_group: str = Field(
+        default="$Default",
+        description="Azure Event Hub consumer group"
+    )
+    
+    # Retry Configuration
+    retry_max_attempts: int = Field(
+        default=3,
+        description="Número máximo de tentativas"
+    )
+    
+    retry_initial_delay: float = Field(
+        default=1.0,
+        description="Delay inicial entre retries (segundos)"
+    )
+    
+    retry_max_delay: float = Field(
+        default=60.0,
+        description="Delay máximo entre retries (segundos)"
+    )
+    
+    retry_exponential_base: float = Field(
+        default=2.0,
+        description="Base para cálculo exponencial do delay"
+    )
+    
+    retry_jitter: bool = Field(
+        default=True,
+        description="Adicionar jitter ao delay"
+    )
+    
+    # Dead Letter Queue
+    enable_dlq: bool = Field(
+        default=True,
+        description="Habilitar dead letter queue"
+    )
+    
+    dlq_topic_suffix: str = Field(
+        default=".dlq",
+        description="Sufixo para tópico de DLQ"
+    )
+    
+    # Circuit Breaker
+    circuit_breaker_failure_threshold: int = Field(
+        default=5,
+        description="Número de falhas para abrir o circuit breaker"
+    )
+    
+    circuit_breaker_timeout: float = Field(
+        default=60.0,
+        description="Timeout do circuit breaker (segundos)"
+    )
+    
+    circuit_breaker_recovery_timeout: float = Field(
+        default=30.0,
+        description="Timeout para recuperação do circuit breaker (segundos)"
+    )
+    
+    # Monitoring
+    monitoring_interval: float = Field(
+        default=60.0,
+        description="Intervalo de coleta de métricas (segundos)"
+    )
+
+
+# Instância global de configuração
+messaging_settings = MessagingSettings()
+```
+
+## 3. Event System
+
+### 📡 **Base Event Class**
+
+```python
+# src/messaging/events/base.py
+"""
+Classe base para eventos.
+"""
+from abc import ABC
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+from uuid import UUID, uuid4
+
+from pydantic import BaseModel, Field, ConfigDict
+
+
+class BaseEvent(BaseModel, ABC):
+    """
+    Classe base para todos os eventos do sistema.
+    
+    Attributes:
+        event_id: Identificador único do evento
+        event_type: Tipo do evento (nome da classe)
+        event_version: Versão do schema do evento
+        timestamp: Timestamp de criação do evento (UTC)
+        correlation_id: ID para correlação entre eventos relacionados
+        causation_id: ID do evento que causou este evento
+        user_id: ID do usuário que gerou o evento
+        metadata: Metadados adicionais do evento
+    """
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "event_id": "123e4567-e89b-12d3-a456-426614174000",
+                "event_type": "UserCreated",
+                "event_version": "1.0.0",
+                "timestamp": "2026-01-27T10:00:00Z",
+                "correlation_id": "123e4567-e89b-12d3-a456-426614174001",
+                "causation_id": None,
+                "user_id": "user-123",
+                "metadata": {"source": "api"}
+            }
+        }
+    )
+    
+    event_id: UUID = Field(
+        default_factory=uuid4,
+        description="Identificador único do evento"
+    )
+    
+    event_type: str = Field(
+        description="Tipo do evento",
+        frozen=True
+    )
+    
+    event_version: str = Field(
+        default="1.0.0",
+        description="Versão do schema do evento",
+        pattern=r"^\d+\.\d+\.\d+$"
+    )
+    
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Timestamp de criação do evento (UTC)"
+    )
+    
+    correlation_id: Optional[UUID] = Field(
+        default=None,
+        description="ID para correlação entre eventos relacionados"
+    )
+    
+    causation_id: Optional[UUID] = Field(
+        default=None,
+        description="ID do evento que causou este evento"
+    )
+    
+    user_id: Optional[str] = Field(
+        default=None,
+        description="ID do usuário que gerou o evento"
+    )
+    
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Metadados adicionais do evento"
+    )
+    
+    def __init__(self, **data):
+        """Inicializa o evento com o tipo correto."""
+        if "event_type" not in data:
+            data["event_type"] = self.__class__.__name__
+        super().__init__(**data)
+    
+    @property
+    def routing_key(self) -> str:
+        """
+        Gera a routing key para o evento.
+        
+        Returns:
+            Routing key no formato: domain.entity.action.version
+        """
+        parts = self._parse_event_type()
+        return f"{parts['domain']}.{parts['entity']}.{parts['action']}.{self.event_version}"
+    
+    def _parse_event_type(self) -> Dict[str, str]:
+        """
+        Parse do event_type para extrair componentes.
+        
+        Returns:
+            Dicionário com domain, entity e action
+        """
+        # Exemplo: UserCreated -> user.created
+        import re
+        
+        # Converte CamelCase para snake_case
+        snake_case = re.sub(r'(?<!^)(?=[A-Z])', '_', self.event_type).lower()
+        parts = snake_case.split('_')
+        
+        if len(parts) >= 2:
+            entity = parts[0]
+            action = '_'.join(parts[1:])
+        else:
+            entity = "system"
+            action = snake_case
+        
+        return {
+            "domain": self.metadata.get("domain", "default"),
+            "entity": entity,
+            "action": action
+        }
+    
+    def with_correlation(self, correlation_id: UUID) -> "BaseEvent":
+        """
+        Cria uma cópia do evento com correlation_id.
+        
+        Args:
+            correlation_id: ID de correlação
+            
+        Returns:
+            Nova instância do evento com correlation_id
+        """
+        return self.model_copy(update={"correlation_id": correlation_id})
+    
+    def with_causation(self, causation_id: UUID) -> "BaseEvent":
+        """
+        Cria uma cópia do evento com causation_id.
+        
+        Args:
+            causation_id: ID de causação
+            
+        Returns:
+            Nova instância do evento com causation_id
+        """
+        return self.model_copy(update={"causation_id": causation_id})
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Converte o evento para dicionário.
+        
+        Returns:
+            Dicionário com os dados do evento
+        """
+        return self.model_dump(mode="json")
+    
+    def to_json(self) -> str:
+        """
+        Converte o evento para JSON.
+        
+        Returns:
+            String JSON com os dados do evento
+        """
+        return self.model_dump_json()
+
+
+class DomainEvent(BaseEvent):
+    """Evento de domínio do negócio."""
+    
+    aggregate_id: str = Field(
+        description="ID do agregado que gerou o evento"
+    )
+    
+    aggregate_type: str = Field(
+        description="Tipo do agregado"
+    )
+    
+    aggregate_version: int = Field(
+        default=1,
+        description="Versão do agregado",
+        ge=1
+    )
+
+
+class IntegrationEvent(BaseEvent):
+    """Evento de integração entre serviços."""
+    
+    source_service: str = Field(
+        description="Serviço de origem do evento"
+    )
+    
+    target_services: list[str] = Field(
+        default_factory=list,
+        description="Serviços destino do evento"
+    )
+
+
+class SystemEvent(BaseEvent):
+    """Evento de sistema."""
+    
+    severity: str = Field(
+        default="info",
+        description="Severidade do evento (debug, info, warning, error, critical)"
+    )
+    
+    component: str = Field(
+        description="Componente que gerou o evento"
+    )
+```
+
+### 📝 **Domain Events Examples**
+
+```python
+# src/messaging/events/user_events.py
+"""
+Eventos de domínio de usuário.
+"""
+from typing import Optional
+from pydantic import Field, EmailStr
+
+from .base import DomainEvent
+
+
+class UserCreated(DomainEvent):
+    """Evento disparado quando um usuário é criado."""
+    
+    email: EmailStr = Field(description="Email do usuário")
+    username: str = Field(description="Nome de usuário")
+    full_name: Optional[str] = Field(default=None, description="Nome completo")
+    is_active: bool = Field(default=True, description="Usuário ativo")
+
+
+class UserUpdated(DomainEvent):
+    """Evento disparado quando um usuário é atualizado."""
+    
+    email: Optional[EmailStr] = Field(default=None, description="Novo email")
+    full_name: Optional[str] = Field(default=None, description="Novo nome completo")
+    updated_fields: list[str] = Field(
+        default_factory=list,
+        description="Campos atualizados"
+    )
+
+
+class UserDeleted(DomainEvent):
+    """Evento disparado quando um usuário é deletado."""
+    
+    email: EmailStr = Field(description="Email do usuário deletado")
+    deletion_reason: Optional[str] = Field(
+        default=None,
+        description="Razão da deleção"
+    )
+
+
+class UserPasswordChanged(DomainEvent):
+    """Evento disparado quando a senha do usuário é alterada."""
+    
+    email: EmailStr = Field(description="Email do usuário")
+    changed_by: str = Field(description="Quem alterou (user ou admin)")
+
+
+class UserEmailVerified(DomainEvent):
+    """Evento disparado quando o email do usuário é verificado."""
+    
+    email: EmailStr = Field(description="Email verificado")
+    verification_method: str = Field(description="Método de verificação")
+```
+
+## 4. Message Interface
+
+### 🔌 **Messaging Interface**
+
+```python
+# src/messaging/interface.py
+"""
+Interface abstrata para messaging.
+"""
+from abc import ABC, abstractmethod
+from typing import Any, Callable, Awaitable, Dict, List, Optional
+
+from .events.base import BaseEvent
+
+
+class MessageProducer(ABC):
+    """Interface abstrata para producers de mensagens."""
+    
+    @abstractmethod
+    async def connect(self) -> None:
+        """Conecta ao broker."""
+        pass
+    
+    @abstractmethod
+    async def disconnect(self) -> None:
+        """Desconecta do broker."""
+        pass
+    
+    @abstractmethod
+    async def publish(
+        self,
+        event: BaseEvent,
+        topic: str,
+        key: Optional[str] = None,
+        headers: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """
+        Publica um evento.
+        
+        Args:
+            event: Evento a ser publicado
+            topic: Tópico de destino
+            key: Chave da mensagem (para particionamento)
+            headers: Headers adicionais
+        """
+        pass
+    
+    @abstractmethod
+    async def publish_batch(
+        self,
+        events: List[BaseEvent],
+        topic: str
+    ) -> None:
+        """
+        Publica múltiplos eventos em batch.
+        
+        Args:
+            events: Lista de eventos
+            topic: Tópico de destino
+        """
+        pass
+
+
+class MessageConsumer(ABC):
+    """Interface abstrata para consumers de mensagens."""
+    
+    @abstractmethod
+    async def connect(self) -> None:
+        """Conecta ao broker."""
+        pass
+    
+    @abstractmethod
+    async def disconnect(self) -> None:
+        """Desconecta do broker."""
+        pass
+    
+    @abstractmethod
+    async def subscribe(
+        self,
+        topics: List[str],
+        handler: Callable[[BaseEvent], Awaitable[None]]
+    ) -> None:
+        """
+        Se inscreve em tópicos.
+        
+        Args:
+            topics: Lista de tópicos
+            handler: Função handler para processar mensagens
+        """
+        pass
+    
+    @abstractmethod
+    async def start_consuming(self) -> None:
+        """Inicia o consumo de mensagens."""
+        pass
+    
+    @abstractmethod
+    async def stop_consuming(self) -> None:
+        """Para o consumo de mensagens."""
+        pass
+    
+    @abstractmethod
+    async def commit(self) -> None:
+        """Comita o offset atual."""
+        pass
+    
+    @abstractmethod
+    async def rollback(self) -> None:
+        """Faz rollback do offset."""
+        pass
+
+
+class MessageBroker(ABC):
+    """Interface abstrata para broker de mensagens."""
+    
+    @abstractmethod
+    def get_producer(self) -> MessageProducer:
+        """Retorna uma instância de producer."""
+        pass
+    
+    @abstractmethod
+    def get_consumer(self, group_id: str) -> MessageConsumer:
+        """Retorna uma instância de consumer."""
+        pass
+    
+    @abstractmethod
+    async def create_topic(
+        self,
+        topic: str,
+        partitions: int = 1,
+        replication_factor: int = 1
+    ) -> None:
+        """Cria um tópico."""
+        pass
+    
+    @abstractmethod
+    async def delete_topic(self, topic: str) -> None:
+        """Deleta um tópico."""
+        pass
+    
+    @abstractmethod
+    async def list_topics(self) -> List[str]:
+        """Lista todos os tópicos."""
+        pass
+    
+    @abstractmethod
+    async def health_check(self) -> bool:
+        """Verifica a saúde do broker."""
+        pass
+```
+
+## 5. Kafka Implementation
+
+### 🔵 **Kafka Producer**
+
+```python
+# src/messaging/brokers/kafka/producer.py
+"""
+Kafka producer implementation.
+"""
+import logging
+from typing import Any, Dict, List, Optional
+
+from aiokafka import AIOKafkaProducer
+from aiokafka.errors import KafkaError
+
+from ...interface import MessageProducer
+from ...events.base import BaseEvent
+from ...serialization import EventSerializer
+from ...monitoring import MetricsCollector
+from ....core.messaging.config import messaging_settings
+
+logger = logging.getLogger(__name__)
+
+
+class KafkaProducer(MessageProducer):
+    """Implementação de producer para Kafka."""
+    
+    def __init__(
+        self,
+        bootstrap_servers: Optional[str] = None,
+        client_id: str = "fastapi-producer",
+        serializer: Optional[EventSerializer] = None,
+        metrics_collector: Optional[MetricsCollector] = None
+    ):
+        """
+        Inicializa o Kafka producer.
+        
+        Args:
+            bootstrap_servers: Servidores Kafka
+            client_id: ID do cliente
+            serializer: Serializador de eventos
+            metrics_collector: Coletor de métricas
+        """
+        self._bootstrap_servers = (
+            bootstrap_servers or messaging_settings.kafka_bootstrap_servers
+        )
+        self._client_id = client_id
+        self._serializer = serializer or EventSerializer()
+        self._metrics = metrics_collector or MetricsCollector()
+        self._producer: Optional[AIOKafkaProducer] = None
+        self._is_connected = False
+    
+    async def connect(self) -> None:
+        """Conecta ao Kafka."""
+        if self._is_connected:
+            logger.warning("Producer já está conectado")
+            return
+        
+        try:
+            self._producer = AIOKafkaProducer(
+                bootstrap_servers=self._bootstrap_servers,
+                client_id=self._client_id,
+                compression_type=messaging_settings.kafka_compression_type,
+                enable_idempotence=messaging_settings.kafka_enable_idempotence,
+                max_in_flight_requests_per_connection=(
+                    messaging_settings.kafka_max_in_flight_requests
+                ),
+                acks='all',  # Aguarda confirmação de todas as réplicas
+                retries=3,
+                request_timeout_ms=30000,
+                security_protocol=messaging_settings.kafka_security_protocol,
+                sasl_mechanism=messaging_settings.kafka_sasl_mechanism,
+                sasl_plain_username=messaging_settings.kafka_sasl_username,
+                sasl_plain_password=messaging_settings.kafka_sasl_password
+            )
+            
+            await self._producer.start()
+            self._is_connected = True
+            logger.info(f"Kafka producer conectado: {self._bootstrap_servers}")
+            
+        except KafkaError as e:
+            logger.error(f"Erro ao conectar Kafka producer: {e}")
+            raise
+    
+    async def disconnect(self) -> None:
+        """Desconecta do Kafka."""
+        if not self._is_connected or not self._producer:
+            return
+        
+        try:
+            await self._producer.stop()
+            self._is_connected = False
+            logger.info("Kafka producer desconectado")
+            
+        except KafkaError as e:
+            logger.error(f"Erro ao desconectar Kafka producer: {e}")
+            raise
+    
+    async def publish(
+        self,
+        event: BaseEvent,
+        topic: str,
+        key: Optional[str] = None,
+        headers: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """
+        Publica um evento no Kafka.
+        
+        Args:
+            event: Evento a ser publicado
+            topic: Tópico de destino
+            key: Chave da mensagem (para particionamento)
+            headers: Headers adicionais
+        """
+        if not self._is_connected or not self._producer:
+            raise RuntimeError("Producer não está conectado")
+        
+        try:
+            # Serializa o evento
+            value = self._serializer.serialize(event)
+            key_bytes = key.encode('utf-8') if key else None
+            
+            # Prepara headers
+            message_headers = self._prepare_headers(event, headers)
+            
+            # Publica no Kafka
+            await self._producer.send(
+                topic=topic,
+                value=value,
+                key=key_bytes,
+                headers=message_headers
+            )
+            
+            # Coleta métricas
+            self._metrics.increment_published_messages(
+                topic=topic,
+                event_type=event.event_type
+            )
+            
+            logger.debug(
+                f"Evento publicado: {event.event_type} -> {topic}",
+                extra={
+                    "event_id": str(event.event_id),
+                    "topic": topic,
+                    "correlation_id": str(event.correlation_id)
+                }
+            )
+            
+        except KafkaError as e:
+            self._metrics.increment_publish_errors(
+                topic=topic,
+                event_type=event.event_type
+            )
+            logger.error(
+                f"Erro ao publicar evento: {e}",
+                extra={
+                    "event_id": str(event.event_id),
+                    "topic": topic
+                }
+            )
+            raise
+    
+    async def publish_batch(
+        self,
+        events: List[BaseEvent],
+        topic: str
+    ) -> None:
+        """
+        Publica múltiplos eventos em batch.
+        
+        Args:
+            events: Lista de eventos
+            topic: Tópico de destino
+        """
+        if not self._is_connected or not self._producer:
+            raise RuntimeError("Producer não está conectado")
+        
+        try:
+            batch = self._producer.create_batch()
+            
+            for event in events:
+                value = self._serializer.serialize(event)
+                headers = self._prepare_headers(event)
+                
+                metadata = batch.append(
+                    key=None,
+                    value=value,
+                    timestamp=None,
+                    headers=headers
+                )
+                
+                if metadata is None:
+                    # Batch cheio, envia e cria novo
+                    await self._producer.send_batch(batch, topic)
+                    batch = self._producer.create_batch()
+                    
+                    # Tenta adicionar novamente
+                    metadata = batch.append(
+                        key=None,
+                        value=value,
+                        timestamp=None,
+                        headers=headers
+                    )
+            
+            # Envia o último batch
+            if batch:
+                await self._producer.send_batch(batch, topic)
+            
+            self._metrics.increment_published_messages(
+                topic=topic,
+                count=len(events)
+            )
+            
+            logger.info(f"Batch de {len(events)} eventos publicado -> {topic}")
+            
+        except KafkaError as e:
+            self._metrics.increment_publish_errors(topic=topic)
+            logger.error(f"Erro ao publicar batch: {e}")
+            raise
+    
+    def _prepare_headers(
+        self,
+        event: BaseEvent,
+        additional_headers: Optional[Dict[str, Any]] = None
+    ) -> List[tuple[str, bytes]]:
+        """Prepara headers da mensagem."""
+        headers = [
+            ("event_type", event.event_type.encode('utf-8')),
+            ("event_version", event.event_version.encode('utf-8')),
+            ("event_id", str(event.event_id).encode('utf-8')),
+            ("timestamp", event.timestamp.isoformat().encode('utf-8'))
+        ]
+        
+        if event.correlation_id:
+            headers.append(
+                ("correlation_id", str(event.correlation_id).encode('utf-8'))
+            )
+        
+        if event.causation_id:
+            headers.append(
+                ("causation_id", str(event.causation_id).encode('utf-8'))
+            )
+        
+        if additional_headers:
+            for key, value in additional_headers.items():
+                if isinstance(value, str):
+                    headers.append((key, value.encode('utf-8')))
+                elif isinstance(value, bytes):
+                    headers.append((key, value))
+        
+        return headers
+```
+
+### 🔵 **Kafka Consumer**
+
+```python
+# src/messaging/brokers/kafka/consumer.py
+"""
+Kafka consumer implementation.
+"""
+import asyncio
+import logging
+from typing import Callable, Awaitable, List, Optional
+
+from aiokafka import AIOKafkaConsumer
+from aiokafka.errors import KafkaError
+
+from ...interface import MessageConsumer
+from ...events.base import BaseEvent
+from ...serialization import EventSerializer
+from ...monitoring import MetricsCollector
+from ...retry import RetryManager
+from ....core.messaging.config import messaging_settings
+
+logger = logging.getLogger(__name__)
+
+
+class KafkaConsumer(MessageConsumer):
+    """Implementação de consumer para Kafka."""
+    
+    def __init__(
+        self,
+        group_id: str,
+        bootstrap_servers: Optional[str] = None,
+        client_id: str = "fastapi-consumer",
+        serializer: Optional[EventSerializer] = None,
+        metrics_collector: Optional[MetricsCollector] = None,
+        retry_manager: Optional[RetryManager] = None
+    ):
+        """
+        Inicializa o Kafka consumer.
+        
+        Args:
+            group_id: ID do consumer group
+            bootstrap_servers: Servidores Kafka
+            client_id: ID do cliente
+            serializer: Serializador de eventos
+            metrics_collector: Coletor de métricas
+            retry_manager: Gerenciador de retries
+        """
+        self._group_id = group_id
+        self._bootstrap_servers = (
+            bootstrap_servers or messaging_settings.kafka_bootstrap_servers
+        )
+        self._client_id = client_id
+        self._serializer = serializer or EventSerializer()
+        self._metrics = metrics_collector or MetricsCollector()
+        self._retry_manager = retry_manager or RetryManager()
+        self._consumer: Optional[AIOKafkaConsumer] = None
+        self._is_connected = False
+        self._is_consuming = False
+        self._handler: Optional[Callable[[BaseEvent], Awaitable[None]]] = None
+        self._consume_task: Optional[asyncio.Task] = None
+    
+    async def connect(self) -> None:
+        """Conecta ao Kafka."""
+        if self._is_connected:
+            logger.warning("Consumer já está conectado")
+            return
+        
+        try:
+            self._consumer = AIOKafkaConsumer(
+                bootstrap_servers=self._bootstrap_servers,
+                group_id=self._group_id,
+                client_id=self._client_id,
+                auto_offset_reset=messaging_settings.kafka_auto_offset_reset,
+                enable_auto_commit=False,  # Commit manual para garantir processamento
+                session_timeout_ms=30000,
+                heartbeat_interval_ms=10000,
+                max_poll_records=100,
+                security_protocol=messaging_settings.kafka_security_protocol,
+                sasl_mechanism=messaging_settings.kafka_sasl_mechanism,
+                sasl_plain_username=messaging_settings.kafka_sasl_username,
+                sasl_plain_password=messaging_settings.kafka_sasl_password
+            )
+            
+            await self._consumer.start()
+            self._is_connected = True
+            logger.info(
+                f"Kafka consumer conectado: {self._bootstrap_servers} "
+                f"(group: {self._group_id})"
+            )
+            
+        except KafkaError as e:
+            logger.error(f"Erro ao conectar Kafka consumer: {e}")
+            raise
+    
+    async def disconnect(self) -> None:
+        """Desconecta do Kafka."""
+        if self._is_consuming:
+            await self.stop_consuming()
+        
+        if not self._is_connected or not self._consumer:
+            return
+        
+        try:
+            await self._consumer.stop()
+            self._is_connected = False
+            logger.info("Kafka consumer desconectado")
+            
+        except KafkaError as e:
+            logger.error(f"Erro ao desconectar Kafka consumer: {e}")
+            raise
+    
+    async def subscribe(
+        self,
+        topics: List[str],
+        handler: Callable[[BaseEvent], Awaitable[None]]
+    ) -> None:
+        """
+        Se inscreve em tópicos.
+        
+        Args:
+            topics: Lista de tópicos
+            handler: Função handler para processar mensagens
+        """
+        if not self._is_connected or not self._consumer:
+            raise RuntimeError("Consumer não está conectado")
+        
+        self._handler = handler
+        self._consumer.subscribe(topics=topics)
+        
+        logger.info(f"Inscrito nos tópicos: {topics}")
+    
+    async def start_consuming(self) -> None:
+        """Inicia o consumo de mensagens."""
+        if not self._is_connected or not self._consumer:
+            raise RuntimeError("Consumer não está conectado")
+        
+        if not self._handler:
+            raise RuntimeError("Handler não foi configurado")
+        
+        if self._is_consuming:
+            logger.warning("Consumer já está consumindo")
+            return
+        
+        self._is_consuming = True
+        self._consume_task = asyncio.create_task(self._consume_loop())
+        logger.info("Consumo iniciado")
+    
+    async def stop_consuming(self) -> None:
+        """Para o consumo de mensagens."""
+        if not self._is_consuming:
+            return
+        
+        self._is_consuming = False
+        
+        if self._consume_task:
+            self._consume_task.cancel()
+            try:
+                await self._consume_task
+            except asyncio.CancelledError:
+                pass
+        
+        logger.info("Consumo parado")
+    
+    async def commit(self) -> None:
+        """Comita o offset atual."""
+        if self._consumer:
+            await self._consumer.commit()
+    
+    async def rollback(self) -> None:
+        """Faz rollback do offset."""
+        if self._consumer:
+            await self._consumer.seek_to_committed()
+    
+    async def _consume_loop(self) -> None:
+        """Loop principal de consumo."""
+        logger.info("Iniciando loop de consumo")
+        
+        try:
+            async for message in self._consumer:
+                if not self._is_consuming:
+                    break
+                
+                try:
+                    await self._process_message(message)
+                    await self.commit()
+                    
+                except Exception as e:
+                    logger.error(
+                        f"Erro ao processar mensagem: {e}",
+                        extra={
+                            "topic": message.topic,
+                            "partition": message.partition,
+                            "offset": message.offset
+                        }
+                    )
+                    # Não faz commit em caso de erro
+                    
+        except asyncio.CancelledError:
+            logger.info("Loop de consumo cancelado")
+        except Exception as e:
+            logger.error(f"Erro no loop de consumo: {e}")
+            raise
+    
+    async def _process_message(self, message) -> None:
+        """Processa uma mensagem individual."""
+        start_time = asyncio.get_event_loop().time()
+        
+        try:
+            # Deserializa o evento
+            event = self._serializer.deserialize(message.value)
+            
+            # Extrai headers
+            headers = {
+                key: value.decode('utf-8') if isinstance(value, bytes) else value
+                for key, value in (message.headers or [])
+            }
+            
+            logger.debug(
+                f"Processando evento: {event.event_type}",
+                extra={
+                    "event_id": str(event.event_id),
+                    "topic": message.topic,
+                    "partition": message.partition,
+                    "offset": message.offset
+                }
+            )
+            
+            # Processa com retry
+            await self._retry_manager.execute_with_retry(
+                func=self._handler,
+                event=event
+            )
+            
+            # Coleta métricas
+            processing_time = asyncio.get_event_loop().time() - start_time
+            self._metrics.record_message_processed(
+                topic=message.topic,
+                event_type=event.event_type,
+                processing_time=processing_time
+            )
+            
+        except Exception as e:
+            self._metrics.increment_processing_errors(
+                topic=message.topic
+            )
+            
+            # Envia para DLQ se habilitado
+            if messaging_settings.enable_dlq:
+                await self._send_to_dlq(message, error=str(e))
+            
+            raise
+    
+    async def _send_to_dlq(self, message, error: str) -> None:
+        """Envia mensagem para Dead Letter Queue."""
+        dlq_topic = f"{message.topic}{messaging_settings.dlq_topic_suffix}"
+        
+        try:
+            # Importação local para evitar circular dependency
+            from .producer import KafkaProducer
+            
+            producer = KafkaProducer()
+            await producer.connect()
+            
+            # Adiciona informações de erro aos headers
+            headers = list(message.headers or [])
+            headers.extend([
+                ("error", error.encode('utf-8')),
+                ("original_topic", message.topic.encode('utf-8')),
+                ("original_partition", str(message.partition).encode('utf-8')),
+                ("original_offset", str(message.offset).encode('utf-8'))
+            ])
+            
+            # Republica no DLQ
+            await producer._producer.send(
+                topic=dlq_topic,
+                value=message.value,
+                key=message.key,
+                headers=headers
+            )
+            
+            await producer.disconnect()
+            
+            logger.warning(
+                f"Mensagem enviada para DLQ: {dlq_topic}",
+                extra={
+                    "original_topic": message.topic,
+                    "error": error
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"Erro ao enviar mensagem para DLQ: {e}")
+```
+
+### 🔵 **Kafka Admin**
+
+```python
+# src/messaging/brokers/kafka/admin.py
+"""
+Kafka admin operations.
+"""
+import logging
+from typing import Dict, List, Optional
+
+from aiokafka.admin import AIOKafkaAdminClient, NewTopic
+from aiokafka.errors import KafkaError, TopicAlreadyExistsError
+
+from ....core.messaging.config import messaging_settings
+
+logger = logging.getLogger(__name__)
+
+
+class KafkaAdmin:
+    """Operações administrativas do Kafka."""
+    
+    def __init__(self, bootstrap_servers: Optional[str] = None):
+        """
+        Inicializa o admin client.
+        
+        Args:
+            bootstrap_servers: Servidores Kafka
+        """
+        self._bootstrap_servers = (
+            bootstrap_servers or messaging_settings.kafka_bootstrap_servers
+        )
+        self._admin: Optional[AIOKafkaAdminClient] = None
+    
+    async def connect(self) -> None:
+        """Conecta ao Kafka."""
+        try:
+            self._admin = AIOKafkaAdminClient(
+                bootstrap_servers=self._bootstrap_servers,
+                security_protocol=messaging_settings.kafka_security_protocol,
+                sasl_mechanism=messaging_settings.kafka_sasl_mechanism,
+                sasl_plain_username=messaging_settings.kafka_sasl_username,
+                sasl_plain_password=messaging_settings.kafka_sasl_password
+            )
+            await self._admin.start()
+            logger.info("Kafka admin conectado")
+            
+        except KafkaError as e:
+            logger.error(f"Erro ao conectar Kafka admin: {e}")
+            raise
+    
+    async def disconnect(self) -> None:
+        """Desconecta do Kafka."""
+        if self._admin:
+            await self._admin.close()
+            logger.info("Kafka admin desconectado")
+    
+    async def create_topic(
+        self,
+        topic: str,
+        partitions: int = 1,
+        replication_factor: int = 1,
+        config: Optional[Dict[str, str]] = None
+    ) -> None:
+        """
+        Cria um tópico.
+        
+        Args:
+            topic: Nome do tópico
+            partitions: Número de partições
+            replication_factor: Fator de replicação
+            config: Configurações adicionais do tópico
+        """
+        if not self._admin:
+            raise RuntimeError("Admin não está conectado")
+        
+        try:
+            new_topic = NewTopic(
+                name=topic,
+                num_partitions=partitions,
+                replication_factor=replication_factor,
+                topic_configs=config or {}
+            )
+            
+            await self._admin.create_topics([new_topic])
+            logger.info(
+                f"Tópico criado: {topic} "
+                f"(partitions={partitions}, replication={replication_factor})"
+            )
+            
+        except TopicAlreadyExistsError:
+            logger.warning(f"Tópico já existe: {topic}")
+        except KafkaError as e:
+            logger.error(f"Erro ao criar tópico {topic}: {e}")
+            raise
+    
+    async def delete_topic(self, topic: str) -> None:
+        """
+        Deleta um tópico.
+        
+        Args:
+            topic: Nome do tópico
+        """
+        if not self._admin:
+            raise RuntimeError("Admin não está conectado")
+        
+        try:
+            await self._admin.delete_topics([topic])
+            logger.info(f"Tópico deletado: {topic}")
+            
+        except KafkaError as e:
+            logger.error(f"Erro ao deletar tópico {topic}: {e}")
+            raise
+    
+    async def list_topics(self) -> List[str]:
+        """
+        Lista todos os tópicos.
+        
+        Returns:
+            Lista de nomes de tópicos
+        """
+        if not self._admin:
+            raise RuntimeError("Admin não está conectado")
+        
+        try:
+            metadata = await self._admin.list_topics()
+            return list(metadata.keys())
+            
+        except KafkaError as e:
+            logger.error(f"Erro ao listar tópicos: {e}")
+            raise
+    
+    async def describe_topic(self, topic: str) -> Dict:
+        """
+        Descreve um tópico.
+        
+        Args:
+            topic: Nome do tópico
+            
+        Returns:
+            Informações do tópico
+        """
+        if not self._admin:
+            raise RuntimeError("Admin não está conectado")
+        
+        try:
+            metadata = await self._admin.list_topics()
+            if topic not in metadata:
+                raise ValueError(f"Tópico não encontrado: {topic}")
+            
+            topic_metadata = metadata[topic]
+            return {
+                "topic": topic,
+                "partitions": len(topic_metadata),
+                "partition_info": [
+                    {
+                        "partition": p.partition,
+                        "leader": p.leader,
+                        "replicas": p.replicas,
+                        "isr": p.isr
+                    }
+                    for p in topic_metadata
+                ]
+            }
+            
+        except KafkaError as e:
+            logger.error(f"Erro ao descrever tópico {topic}: {e}")
+            raise
+```
+
+## 6. Event Handlers
+
+### 🎯 **Handler System**
+
+```python
+# src/messaging/handlers/base.py
+"""
+Base handler para eventos.
+"""
+import logging
+from abc import ABC, abstractmethod
+from typing import Type
+
+from ..events.base import BaseEvent
+
+logger = logging.getLogger(__name__)
+
+
+class EventHandler(ABC):
+    """
+    Classe base para handlers de eventos.
+    
+    Cada handler deve processar um tipo específico de evento
+    e implementar lógica de negócio correspondente.
+    """
+    
+    @property
+    @abstractmethod
+    def event_type(self) -> Type[BaseEvent]:
+        """Tipo de evento que este handler processa."""
+        pass
+    
+    @abstractmethod
+    async def handle(self, event: BaseEvent) -> None:
+        """
+        Processa o evento.
+        
+        Args:
+            event: Evento a ser processado
+            
+        Raises:
+            Exception: Se houver erro no processamento
+        """
+        pass
+    
+    async def on_success(self, event: BaseEvent) -> None:
+        """
+        Callback executado após processamento bem-sucedido.
+        
+        Args:
+            event: Evento processado
+        """
+        logger.info(
+            f"Evento processado com sucesso: {event.event_type}",
+            extra={"event_id": str(event.event_id)}
+        )
+    
+    async def on_error(self, event: BaseEvent, error: Exception) -> None:
+        """
+        Callback executado após erro no processamento.
+        
+        Args:
+            event: Evento que falhou
+            error: Exceção que ocorreu
+        """
+        logger.error(
+            f"Erro ao processar evento: {error}",
+            extra={
+                "event_id": str(event.event_id),
+                "event_type": event.event_type,
+                "error": str(error)
+            },
+            exc_info=True
+        )
+    
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(event_type={self.event_type.__name__})"
+
+
+class IdempotentEventHandler(EventHandler):
+    """
+    Handler que garante processamento idempotente.
+    
+    Mantém registro de eventos já processados para evitar duplicação.
+    """
+    
+    def __init__(self):
+        self._processed_events: set[str] = set()
+    
+    async def handle(self, event: BaseEvent) -> None:
+        """Processa o evento de forma idempotente."""
+        event_id = str(event.event_id)
+        
+        if event_id in self._processed_events:
+            logger.warning(
+                f"Evento já processado (ignorando): {event.event_type}",
+                extra={"event_id": event_id}
+            )
+            return
+        
+        try:
+            await self.process(event)
+            self._processed_events.add(event_id)
+            await self.on_success(event)
+            
+        except Exception as e:
+            await self.on_error(event, e)
+            raise
+    
+    @abstractmethod
+    async def process(self, event: BaseEvent) -> None:
+        """
+        Implementação da lógica de processamento.
+        
+        Args:
+            event: Evento a ser processado
+        """
+        pass
+```
+
+### 🎯 **Handler Examples**
+
+```python
+# src/messaging/handlers/user_handler.py
+"""
+Handlers para eventos de usuário.
+"""
+import logging
+from typing import Type
+
+from .base import IdempotentEventHandler
+from ..events.base import BaseEvent
+from ..events.user_events import (
+    UserCreated,
+    UserUpdated,
+    UserDeleted,
+    UserEmailVerified
+)
+
+logger = logging.getLogger(__name__)
+
+
+class UserCreatedHandler(IdempotentEventHandler):
+    """Handler para evento de criação de usuário."""
+    
+    @property
+    def event_type(self) -> Type[BaseEvent]:
+        return UserCreated
+    
+    async def process(self, event: UserCreated) -> None:
+        """
+        Processa criação de usuário.
+        
+        Exemplo: Envia email de boas-vindas, cria perfil inicial, etc.
+        """
+        logger.info(
+            f"Processando criação de usuário: {event.email}",
+            extra={
+                "event_id": str(event.event_id),
+                "user_email": event.email,
+                "aggregate_id": event.aggregate_id
+            }
+        )
+        
+        # Exemplo de lógica de negócio
+        # await self._send_welcome_email(event.email, event.full_name)
+        # await self._create_user_profile(event.aggregate_id)
+        # await self._notify_admin(event)
+        
+        logger.info(f"Usuário criado processado: {event.email}")
+
+
+class UserEmailVerifiedHandler(IdempotentEventHandler):
+    """Handler para evento de verificação de email."""
+    
+    @property
+    def event_type(self) -> Type[BaseEvent]:
+        return UserEmailVerified
+    
+    async def process(self, event: UserEmailVerified) -> None:
+        """
+        Processa verificação de email.
+        
+        Exemplo: Ativa conta, concede permissões, etc.
+        """
+        logger.info(
+            f"Processando verificação de email: {event.email}",
+            extra={
+                "event_id": str(event.event_id),
+                "aggregate_id": event.aggregate_id,
+                "verification_method": event.verification_method
+            }
+        )
+        
+        # Exemplo de lógica de negócio
+        # await self._activate_user_account(event.aggregate_id)
+        # await self._grant_verified_permissions(event.aggregate_id)
+        # await self._send_confirmation_email(event.email)
+        
+        logger.info(f"Email verificado processado: {event.email}")
+```
+
+## 7. Event Dispatcher
+
+### 📩 **Event Publishing and Routing**
+
+```python
+# src/core/events/dispatcher.py
+"""
+Event dispatcher central.
+"""
+import logging
+from typing import Dict, List, Optional, Type
+
+from ...messaging.interface import MessageProducer
+from ...messaging.events.base import BaseEvent
+from ...messaging.handlers.base import EventHandler
+from .registry import HandlerRegistry
+
+logger = logging.getLogger(__name__)
+
+
+class EventDispatcher:
+    """
+    Dispatcher central para publicação e roteamento de eventos.
+    
+    Responsável por:
+    - Publicar eventos no broker
+    - Rotear eventos para handlers apropriados
+    - Gerenciar registro de handlers
+    """
+    
+    def __init__(
+        self,
+        producer: MessageProducer,
+        registry: Optional[HandlerRegistry] = None
+    ):
+        """
+        Inicializa o dispatcher.
+        
+        Args:
+            producer: Producer de mensagens
+            registry: Registro de handlers
+        """
+        self._producer = producer
+        self._registry = registry or HandlerRegistry()
+        self._topic_mapping: Dict[Type[BaseEvent], str] = {}
+    
+    def register_handler(self, handler: EventHandler) -> None:
+        """
+        Registra um handler para um tipo de evento.
+        
+        Args:
+            handler: Handler a ser registrado
+        """
+        self._registry.register(handler)
+        logger.info(f"Handler registrado: {handler}")
+    
+    def register_handlers(self, handlers: List[EventHandler]) -> None:
+        """
+        Registra múltiplos handlers.
+        
+        Args:
+            handlers: Lista de handlers
+        """
+        for handler in handlers:
+            self.register_handler(handler)
+    
+    def map_event_to_topic(
+        self,
+        event_type: Type[BaseEvent],
+        topic: str
+    ) -> None:
+        """
+        Mapeia um tipo de evento para um tópico.
+        
+        Args:
+            event_type: Tipo do evento
+            topic: Nome do tópico
+        """
+        self._topic_mapping[event_type] = topic
+        logger.info(f"Mapeamento criado: {event_type.__name__} -> {topic}")
+    
+    async def publish(
+        self,
+        event: BaseEvent,
+        topic: Optional[str] = None
+    ) -> None:
+        """
+        Publica um evento.
+        
+        Args:
+            event: Evento a ser publicado
+            topic: Tópico de destino (opcional, usa mapeamento se não fornecido)
+        """
+        # Determina o tópico
+        if topic is None:
+            topic = self._get_topic_for_event(event)
+        
+        # Usa o aggregate_id como key para particionamento consistente
+        key = None
+        if hasattr(event, 'aggregate_id'):
+            key = event.aggregate_id
+        
+        try:
+            await self._producer.publish(
+                event=event,
+                topic=topic,
+                key=key
+            )
+            
+            logger.info(
+                f"Evento publicado: {event.event_type} -> {topic}",
+                extra={
+                    "event_id": str(event.event_id),
+                    "correlation_id": str(event.correlation_id),
+                    "topic": topic
+                }
+            )
+            
+        except Exception as e:
+            logger.error(
+                f"Erro ao publicar evento: {e}",
+                extra={
+                    "event_id": str(event.event_id),
+                    "event_type": event.event_type,
+                    "topic": topic
+                }
+            )
+            raise
+    
+    async def dispatch(self, event: BaseEvent) -> None:
+        """
+        Despacha um evento para os handlers apropriados.
+        
+        Args:
+            event: Evento a ser despachado
+        """
+        handlers = self._registry.get_handlers(type(event))
+        
+        if not handlers:
+            logger.warning(
+                f"Nenhum handler encontrado para evento: {event.event_type}",
+                extra={"event_id": str(event.event_id)}
+            )
+            return
+        
+        logger.debug(
+            f"Despachando evento para {len(handlers)} handler(s): {event.event_type}",
+            extra={"event_id": str(event.event_id)}
+        )
+        
+        for handler in handlers:
+            try:
+                await handler.handle(event)
+                
+            except Exception as e:
+                logger.error(
+                    f"Erro no handler {handler}: {e}",
+                    extra={
+                        "event_id": str(event.event_id),
+                        "handler": str(handler)
+                    }
+                )
+                # Continua processando outros handlers
+    
+    def _get_topic_for_event(self, event: BaseEvent) -> str:
+        """
+        Determina o tópico para um evento.
+        
+        Args:
+            event: Evento
+            
+        Returns:
+            Nome do tópico
+        """
+        event_type = type(event)
+        
+        # Verifica mapeamento explícito
+        if event_type in self._topic_mapping:
+            return self._topic_mapping[event_type]
+        
+        # Usa routing key baseada em convenção
+        return event.routing_key.replace('.', '-')
+
+
+# src/core/events/registry.py
+"""
+Handler registry.
+"""
+import logging
+from collections import defaultdict
+from typing import Dict, List, Type
+
+from ...messaging.events.base import BaseEvent
+from ...messaging.handlers.base import EventHandler
+
+logger = logging.getLogger(__name__)
+
+
+class HandlerRegistry:
+    """
+    Registro de handlers de eventos.
+    
+    Mantém mapeamento entre tipos de eventos e seus handlers.
+    """
+    
+    def __init__(self):
+        """Inicializa o registro."""
+        self._handlers: Dict[Type[BaseEvent], List[EventHandler]] = defaultdict(list)
+    
+    def register(self, handler: EventHandler) -> None:
+        """
+        Registra um handler.
+        
+        Args:
+            handler: Handler a ser registrado
+        """
+        event_type = handler.event_type
+        
+        if handler in self._handlers[event_type]:
+            logger.warning(f"Handler já registrado: {handler}")
+            return
+        
+        self._handlers[event_type].append(handler)
+        logger.info(
+            f"Handler registrado: {handler} para evento {event_type.__name__}"
+        )
+    
+    def unregister(self, handler: EventHandler) -> None:
+        """
+        Remove o registro de um handler.
+        
+        Args:
+            handler: Handler a ser removido
+        """
+        event_type = handler.event_type
+        
+        if handler in self._handlers[event_type]:
+            self._handlers[event_type].remove(handler)
+            logger.info(f"Handler removido: {handler}")
+    
+    def get_handlers(self, event_type: Type[BaseEvent]) -> List[EventHandler]:
+        """
+        Retorna os handlers para um tipo de evento.
+        
+        Args:
+            event_type: Tipo do evento
+            
+        Returns:
+            Lista de handlers
+        """
+        return self._handlers.get(event_type, [])
+    
+    def clear(self) -> None:
+        """Remove todos os handlers."""
+        self._handlers.clear()
+        logger.info("Registry limpo")
+```
+
+## 8. Serialization & Retry
+
+### 🔄 **Message Serialization**
+
+```python
+# src/messaging/serialization.py
+"""
+Message serialization.
+"""
+import json
+import logging
+from typing import Any, Dict, Type
+
+from .events.base import BaseEvent
+
+logger = logging.getLogger(__name__)
+
+
+class EventSerializer:
+    """Serializador de eventos."""
+    
+    def __init__(self):
+        """Inicializa o serializador."""
+        self._event_registry: Dict[str, Type[BaseEvent]] = {}
+    
+    def register_event_type(
+        self,
+        event_type: Type[BaseEvent]
+    ) -> None:
+        """
+        Registra um tipo de evento.
+        
+        Args:
+            event_type: Classe do evento
+        """
+        event_name = event_type.__name__
+        self._event_registry[event_name] = event_type
+        logger.debug(f"Tipo de evento registrado: {event_name}")
+    
+    def serialize(self, event: BaseEvent) -> bytes:
+        """
+        Serializa um evento para bytes.
+        
+        Args:
+            event: Evento a ser serializado
+            
+        Returns:
+            Evento serializado em bytes
+        """
+        try:
+            data = event.model_dump(mode="json")
+            json_str = json.dumps(data, ensure_ascii=False)
+            return json_str.encode('utf-8')
+            
+        except Exception as e:
+            logger.error(f"Erro ao serializar evento: {e}")
+            raise
+    
+    def deserialize(self, data: bytes) -> BaseEvent:
+        """
+        Deserializa bytes para um evento.
+        
+        Args:
+            data: Dados serializados
+            
+        Returns:
+            Evento deserializado
+        """
+        try:
+            json_str = data.decode('utf-8')
+            event_dict = json.loads(json_str)
+            
+            # Obtém o tipo do evento
+            event_type_name = event_dict.get('event_type')
+            if not event_type_name:
+                raise ValueError("event_type não encontrado nos dados")
+            
+            # Busca a classe do evento
+            event_class = self._event_registry.get(event_type_name)
+            if not event_class:
+                # Fallback para BaseEvent
+                logger.warning(
+                    f"Tipo de evento não registrado: {event_type_name}, "
+                    "usando BaseEvent"
+                )
+                event_class = BaseEvent
+            
+            # Cria a instância do evento
+            return event_class(**event_dict)
+            
+        except Exception as e:
+            logger.error(f"Erro ao deserializar evento: {e}")
+            raise
+```
+
+### 🔄 **Retry Mechanisms**
+
+```python
+# src/messaging/retry.py
+"""
+Retry mechanisms.
+"""
+import asyncio
+import logging
+import random
+from typing import Any, Awaitable, Callable, Optional
+
+from ..core.messaging.config import messaging_settings
+
+logger = logging.getLogger(__name__)
+
+
+class RetryManager:
+    """Gerenciador de retry para processamento de mensagens."""
+    
+    def __init__(
+        self,
+        max_attempts: Optional[int] = None,
+        initial_delay: Optional[float] = None,
+        max_delay: Optional[float] = None,
+        exponential_base: Optional[float] = None,
+        jitter: Optional[bool] = None
+    ):
+        """
+        Inicializa o retry manager.
+        
+        Args:
+            max_attempts: Número máximo de tentativas
+            initial_delay: Delay inicial (segundos)
+            max_delay: Delay máximo (segundos)
+            exponential_base: Base para cálculo exponencial
+            jitter: Se deve adicionar jitter
+        """
+        self.max_attempts = max_attempts or messaging_settings.retry_max_attempts
+        self.initial_delay = initial_delay or messaging_settings.retry_initial_delay
+        self.max_delay = max_delay or messaging_settings.retry_max_delay
+        self.exponential_base = (
+            exponential_base or messaging_settings.retry_exponential_base
+        )
+        self.jitter = jitter if jitter is not None else messaging_settings.retry_jitter
+    
+    async def execute_with_retry(
+        self,
+        func: Callable[..., Awaitable[Any]],
+        *args,
+        **kwargs
+    ) -> Any:
+        """
+        Executa uma função com retry automático.
+        
+        Args:
+            func: Função assíncrona a ser executada
+            *args: Argumentos posicionais
+            **kwargs: Argumentos nomeados
+            
+        Returns:
+            Resultado da função
+            
+        Raises:
+            Exception: Se todas as tentativas falharem
+        """
+        last_exception: Optional[Exception] = None
+        
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                return await func(*args, **kwargs)
+                
+            except Exception as e:
+                last_exception = e
+                
+                if attempt == self.max_attempts:
+                    logger.error(
+                        f"Todas as {self.max_attempts} tentativas falharam: {e}"
+                    )
+                    raise
+                
+                delay = self._calculate_delay(attempt)
+                
+                logger.warning(
+                    f"Tentativa {attempt}/{self.max_attempts} falhou: {e}. "
+                    f"Retrying em {delay:.2f}s..."
+                )
+                
+                await asyncio.sleep(delay)
+        
+        # Não deveria chegar aqui, mas por segurança
+        if last_exception:
+            raise last_exception
+    
+    def _calculate_delay(self, attempt: int) -> float:
+        """
+        Calcula o delay para uma tentativa.
+        
+        Args:
+            attempt: Número da tentativa
+            
+        Returns:
+            Delay em segundos
+        """
+        # Exponential backoff
+        delay = min(
+            self.initial_delay * (self.exponential_base ** (attempt - 1)),
+            self.max_delay
+        )
+        
+        # Adiciona jitter se habilitado
+        if self.jitter:
+            delay = delay * (0.5 + random.random())
+        
+        return delay
+
+
+class CircuitBreaker:
+    """
+    Circuit breaker para proteção contra falhas.
+    
+    Estados:
+    - CLOSED: Normal, requisições passam
+    - OPEN: Detectou falhas, bloqueia requisições
+    - HALF_OPEN: Testando recuperação
+    """
+    
+    def __init__(
+        self,
+        failure_threshold: Optional[int] = None,
+        timeout: Optional[float] = None,
+        recovery_timeout: Optional[float] = None
+    ):
+        """
+        Inicializa o circuit breaker.
+        
+        Args:
+            failure_threshold: Número de falhas para abrir
+            timeout: Timeout para bloquear (segundos)
+            recovery_timeout: Timeout para tentar recuperação (segundos)
+        """
+        self.failure_threshold = (
+            failure_threshold or 
+            messaging_settings.circuit_breaker_failure_threshold
+        )
+        self.timeout = timeout or messaging_settings.circuit_breaker_timeout
+        self.recovery_timeout = (
+            recovery_timeout or 
+            messaging_settings.circuit_breaker_recovery_timeout
+        )
+        
+        self._failure_count = 0
+        self._last_failure_time: Optional[float] = None
+        self._state = "CLOSED"
+    
+    async def call(
+        self,
+        func: Callable[..., Awaitable[Any]],
+        *args,
+        **kwargs
+    ) -> Any:
+        """
+        Executa uma função através do circuit breaker.
+        
+        Args:
+            func: Função a ser executada
+            *args: Argumentos posicionais
+            **kwargs: Argumentos nomeados
+            
+        Returns:
+            Resultado da função
+            
+        Raises:
+            Exception: Se o circuit breaker estiver aberto ou a função falhar
+        """
+        if self._state == "OPEN":
+            if self._should_attempt_reset():
+                self._state = "HALF_OPEN"
+                logger.info("Circuit breaker: OPEN -> HALF_OPEN")
+            else:
+                raise Exception("Circuit breaker está OPEN")
+        
+        try:
+            result = await func(*args, **kwargs)
+            self._on_success()
+            return result
+            
+        except Exception as e:
+            self._on_failure()
+            raise
+    
+    def _on_success(self) -> None:
+        """Callback de sucesso."""
+        self._failure_count = 0
+        
+        if self._state == "HALF_OPEN":
+            self._state = "CLOSED"
+            logger.info("Circuit breaker: HALF_OPEN -> CLOSED")
+    
+    def _on_failure(self) -> None:
+        """Callback de falha."""
+        self._failure_count += 1
+        self._last_failure_time = asyncio.get_event_loop().time()
+        
+        if self._failure_count >= self.failure_threshold:
+            self._state = "OPEN"
+            logger.warning(
+                f"Circuit breaker aberto após {self._failure_count} falhas"
+            )
+    
+    def _should_attempt_reset(self) -> bool:
+        """Verifica se deve tentar resetar o circuit breaker."""
+        if not self._last_failure_time:
+            return False
+        
+        elapsed = asyncio.get_event_loop().time() - self._last_failure_time
+        return elapsed >= self.recovery_timeout
+```
+
+## 9. Monitoring
+
+### 📊 **Metrics and Monitoring**
+
+```python
+# src/messaging/monitoring.py
+"""
+Metrics and monitoring.
+"""
+import logging
+from typing import Dict, Optional
+from prometheus_client import Counter, Histogram, Gauge
+
+logger = logging.getLogger(__name__)
+
+
+class MetricsCollector:
+    """Coletor de métricas para mensageria."""
+    
+    def __init__(self):
+        """Inicializa o coletor de métricas."""
+        # Contadores
+        self.messages_published = Counter(
+            'messaging_messages_published_total',
+            'Total de mensagens publicadas',
+            ['topic', 'event_type']
+        )
+        
+        self.messages_consumed = Counter(
+            'messaging_messages_consumed_total',
+            'Total de mensagens consumidas',
+            ['topic', 'event_type']
+        )
+        
+        self.publish_errors = Counter(
+            'messaging_publish_errors_total',
+            'Total de erros ao publicar mensagens',
+            ['topic', 'event_type']
+        )
+        
+        self.processing_errors = Counter(
+            'messaging_processing_errors_total',
+            'Total de erros ao processar mensagens',
+            ['topic', 'event_type']
+        )
+        
+        self.dlq_messages = Counter(
+            'messaging_dlq_messages_total',
+            'Total de mensagens enviadas para DLQ',
+            ['topic']
+        )
+        
+        # Histogramas
+        self.processing_duration = Histogram(
+            'messaging_processing_duration_seconds',
+            'Tempo de processamento de mensagens',
+            ['topic', 'event_type'],
+            buckets=(0.01, 0.05, 0.1, 0.5, 1.0, 2.5, 5.0, 10.0)
+        )
+        
+        self.publish_duration = Histogram(
+            'messaging_publish_duration_seconds',
+            'Tempo para publicar mensagens',
+            ['topic', 'event_type'],
+            buckets=(0.01, 0.05, 0.1, 0.5, 1.0)
+        )
+        
+        # Gauges
+        self.consumer_lag = Gauge(
+            'messaging_consumer_lag',
+            'Lag do consumer',
+            ['topic', 'partition', 'group_id']
+        )
+        
+        self.active_handlers = Gauge(
+            'messaging_active_handlers',
+            'Número de handlers ativos'
+        )
+    
+    def increment_published_messages(
+        self,
+        topic: str,
+        event_type: str = "unknown",
+        count: int = 1
+    ) -> None:
+        """Incrementa contador de mensagens publicadas."""
+        self.messages_published.labels(
+            topic=topic,
+            event_type=event_type
+        ).inc(count)
+    
+    def increment_consumed_messages(
+        self,
+        topic: str,
+        event_type: str = "unknown"
+    ) -> None:
+        """Incrementa contador de mensagens consumidas."""
+        self.messages_consumed.labels(
+            topic=topic,
+            event_type=event_type
+        ).inc()
+    
+    def increment_publish_errors(
+        self,
+        topic: str,
+        event_type: str = "unknown"
+    ) -> None:
+        """Incrementa contador de erros de publicação."""
+        self.publish_errors.labels(
+            topic=topic,
+            event_type=event_type
+        ).inc()
+    
+    def increment_processing_errors(
+        self,
+        topic: str,
+        event_type: str = "unknown"
+    ) -> None:
+        """Incrementa contador de erros de processamento."""
+        self.processing_errors.labels(
+            topic=topic,
+            event_type=event_type
+        ).inc()
+    
+    def increment_dlq_messages(self, topic: str) -> None:
+        """Incrementa contador de mensagens DLQ."""
+        self.dlq_messages.labels(topic=topic).inc()
+    
+    def record_message_processed(
+        self,
+        topic: str,
+        event_type: str,
+        processing_time: float
+    ) -> None:
+        """Registra processamento de mensagem."""
+        self.messages_consumed.labels(
+            topic=topic,
+            event_type=event_type
+        ).inc()
+        
+        self.processing_duration.labels(
+            topic=topic,
+            event_type=event_type
+        ).observe(processing_time)
+    
+    def record_message_published(
+        self,
+        topic: str,
+        event_type: str,
+        publish_time: float
+    ) -> None:
+        """Registra publicação de mensagem."""
+        self.messages_published.labels(
+            topic=topic,
+            event_type=event_type
+        ).inc()
+        
+        self.publish_duration.labels(
+            topic=topic,
+            event_type=event_type
+        ).observe(publish_time)
+    
+    def set_consumer_lag(
+        self,
+        topic: str,
+        partition: int,
+        group_id: str,
+        lag: int
+    ) -> None:
+        """Define o lag do consumer."""
+        self.consumer_lag.labels(
+            topic=topic,
+            partition=str(partition),
+            group_id=group_id
+        ).set(lag)
+    
+    def set_active_handlers(self, count: int) -> None:
+        """Define o número de handlers ativos."""
+        self.active_handlers.set(count)
+```
+
+## 10. Boas Práticas
+
+### ✅ **DO's - Práticas Recomendadas**
+
+#### ✅ Use eventos descritivos e versionados
+
+```python
+# ✅ CORRETO: Evento bem nomeado e versionado
+from pydantic import Field
+from messaging.events.base import DomainEvent
+
+class OrderCreatedV2(DomainEvent):
+    """
+    Evento de criação de pedido (versão 2).
+    
+    Changelog:
+    - v1.0.0: Versão inicial
+    - v2.0.0: Adicionado campo payment_method
+    """
+    
+    event_version: str = Field(default="2.0.0")
+    
+    order_id: str
+    customer_id: str
+    total_amount: float
+    payment_method: str  # Novo campo na v2
+    items: list[dict]
+
+# ✅ CORRETO: Mantém compatibilidade com versão anterior
+class OrderCreatedV1(DomainEvent):
+    """Evento de criação de pedido (versão 1)."""
+    
+    event_version: str = Field(default="1.0.0")
+    
+    order_id: str
+    customer_id: str
+    total_amount: float
+    items: list[dict]
+```
+
+#### ✅ Inclua contexto suficiente nos eventos
+
+```python
+# ✅ CORRETO: Evento com contexto completo
+class PaymentProcessed(DomainEvent):
+    """Evento de pagamento processado."""
+    
+    # Identificação
+    payment_id: str
+    order_id: str
+    customer_id: str
+    
+    # Dados do pagamento
+    amount: float
+    currency: str
+    payment_method: str
+    status: str
+    
+    # Contexto temporal
+    processed_at: datetime
+    
+    # Contexto de integração
+    gateway_transaction_id: str
+    gateway_name: str
+    
+    # Dados de auditoria
+    processed_by: str  # Sistema ou usuário que processou
+    ip_address: Optional[str]
+    
+    # Metadados para troubleshooting
+    retry_count: int = 0
+    error_details: Optional[str] = None
+```
+
+#### ✅ Implemente idempotência nos handlers
+
+```python
+# ✅ CORRETO: Handler idempotente usando Redis
+from redis.asyncio import Redis
+from messaging.handlers.base import EventHandler
+
+class PaymentHandler(EventHandler):
+    """Handler idempotente para pagamentos."""
+    
+    def __init__(self, redis: Redis):
+        self._redis = redis
+    
+    @property
+    def event_type(self):
+        return PaymentProcessed
+    
+    async def handle(self, event: PaymentProcessed) -> None:
+        """Processa pagamento de forma idempotente."""
+        event_id = str(event.event_id)
+        lock_key = f"payment:lock:{event_id}"
+        processed_key = f"payment:processed:{event_id}"
+        
+        # Verifica se já foi processado
+        if await self._redis.exists(processed_key):
+            logger.info(f"Pagamento já processado: {event_id}")
+            return
+        
+        # Adquire lock distribuído
+        lock = await self._redis.set(
+            lock_key,
+            "locked",
+            ex=300,  # 5 minutos
+            nx=True  # Apenas se não existir
+        )
+        
+        if not lock:
+            logger.warning(f"Lock já adquirido para evento: {event_id}")
+            return
+        
+        try:
+            # Processa o pagamento
+            await self._process_payment(event)
+            
+            # Marca como processado (TTL de 7 dias)
+            await self._redis.setex(
+                processed_key,
+                604800,  # 7 dias
+                "processed"
+            )
+            
+        finally:
+            # Libera o lock
+            await self._redis.delete(lock_key)
+    
+    async def _process_payment(self, event: PaymentProcessed) -> None:
+        """Lógica de processamento do pagamento."""
+        # Implementação...
+        pass
+```
+
+#### ✅ Use Dead Letter Queues para falhas
+
+```python
+# ✅ CORRETO: Configuração de DLQ no consumer
+class ConsumerWithDLQ:
+    """Consumer com suporte a DLQ."""
+    
+    async def process_message(self, message):
+        """Processa mensagem com fallback para DLQ."""
+        max_retries = 3
+        retry_count = self._get_retry_count(message)
+        
+        try:
+            # Tenta processar
+            await self._process(message)
+            
+        except RecoverableError as e:
+            # Erro recuperável - faz retry
+            if retry_count < max_retries:
+                await self._schedule_retry(message, retry_count + 1)
+            else:
+                # Máximo de retries atingido - envia para DLQ
+                await self._send_to_dlq(message, error=str(e))
+            
+        except UnrecoverableError as e:
+            # Erro não recuperável - envia direto para DLQ
+            await self._send_to_dlq(message, error=str(e))
+    
+    async def _send_to_dlq(self, message, error: str) -> None:
+        """Envia mensagem para DLQ com contexto de erro."""
+        dlq_message = {
+            "original_topic": message.topic,
+            "original_message": message.value,
+            "error": error,
+            "retry_count": self._get_retry_count(message),
+            "failed_at": datetime.utcnow().isoformat(),
+            "headers": dict(message.headers)
+        }
+        
+        await self._producer.publish(
+            event=dlq_message,
+            topic=f"{message.topic}.dlq"
+        )
+```
+
+#### ✅ Monitore métricas de mensageria
+
+```python
+# ✅ CORRETO: Instrumentação completa com métricas
+from prometheus_client import Counter, Histogram, Gauge
+import structlog
+
+logger = structlog.get_logger()
+
+class MonitoredEventDispatcher:
+    """Dispatcher com monitoramento completo."""
+    
+    def __init__(self):
+        # Métricas Prometheus
+        self.events_published = Counter(
+            'events_published_total',
+            'Total de eventos publicados',
+            ['event_type', 'topic', 'status']
+        )
+        
+        self.publish_latency = Histogram(
+            'event_publish_latency_seconds',
+            'Latência de publicação de eventos',
+            ['event_type', 'topic']
+        )
+        
+        self.queue_size = Gauge(
+            'event_queue_size',
+            'Tamanho da fila de eventos',
+            ['topic']
+        )
+    
+    async def publish(self, event: BaseEvent, topic: str) -> None:
+        """Publica evento com monitoramento."""
+        start_time = time.time()
+        
+        try:
+            await self._producer.publish(event, topic)
+            
+            # Métricas de sucesso
+            self.events_published.labels(
+                event_type=event.event_type,
+                topic=topic,
+                status='success'
+            ).inc()
+            
+            latency = time.time() - start_time
+            self.publish_latency.labels(
+                event_type=event.event_type,
+                topic=topic
+            ).observe(latency)
+            
+            # Log estruturado
+            logger.info(
+                "event_published",
+                event_type=event.event_type,
+                event_id=str(event.event_id),
+                topic=topic,
+                latency_ms=latency * 1000,
+                correlation_id=str(event.correlation_id)
+            )
+            
+        except Exception as e:
+            # Métricas de erro
+            self.events_published.labels(
+                event_type=event.event_type,
+                topic=topic,
+                status='error'
+            ).inc()
+            
+            logger.error(
+                "event_publish_failed",
+                event_type=event.event_type,
+                event_id=str(event.event_id),
+                topic=topic,
+                error=str(e),
+                exc_info=True
+            )
+            raise
+```
+
+#### ✅ Implemente Circuit Breaker para falhas
+
+```python
+# ✅ CORRETO: Circuit breaker protegendo chamadas externas
+from messaging.retry import CircuitBreaker
+
+class NotificationService:
+    """Serviço de notificação com circuit breaker."""
+    
+    def __init__(self):
+        self._circuit_breaker = CircuitBreaker(
+            failure_threshold=5,
+            timeout=60.0,
+            recovery_timeout=30.0
+        )
+    
+    async def send_notification(self, event: BaseEvent) -> None:
+        """Envia notificação com proteção de circuit breaker."""
+        try:
+            await self._circuit_breaker.call(
+                self._do_send_notification,
+                event
+            )
+            
+        except Exception as e:
+            logger.error(
+                f"Falha ao enviar notificação: {e}",
+                extra={
+                    "event_id": str(event.event_id),
+                    "circuit_state": self._circuit_breaker._state
+                }
+            )
+            
+            # Estratégia de fallback
+            await self._fallback_notification(event)
+    
+    async def _do_send_notification(self, event: BaseEvent) -> None:
+        """Implementação real do envio."""
+        # Chamada ao serviço externo
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://notification-service/send",
+                json=event.to_dict(),
+                timeout=10.0
+            )
+            response.raise_for_status()
+    
+    async def _fallback_notification(self, event: BaseEvent) -> None:
+        """Estratégia de fallback quando circuit breaker está aberto."""
+        # Exemplo: salva em fila secundária para processamento posterior
+        await self._backup_queue.enqueue(event)
+        logger.info(f"Notificação enviada para fila de backup: {event.event_id}")
+```
+
+### ❌ **DON'Ts - Práticas a Evitar**
+
+#### ❌ Não inclua dados sensíveis em eventos
+
+```python
+# ❌ ERRADO: Dados sensíveis expostos
+class UserCreated(DomainEvent):
+    email: str
+    password: str  # ❌ NUNCA inclua senha!
+    credit_card: str  # ❌ NUNCA inclua dados de cartão!
+    ssn: str  # ❌ NUNCA inclua dados pessoais sensíveis!
+
+# ✅ CORRETO: Apenas referências e dados não sensíveis
+class UserCreated(DomainEvent):
+    user_id: str
+    email: str  # OK se necessário
+    username: str
+    account_status: str
+    # Dados sensíveis ficam apenas no banco de dados
+```
+
+#### ❌ Não faça operações síncronas em handlers
+
+```python
+# ❌ ERRADO: Operações síncronas bloqueantes
+class OrderHandler(EventHandler):
+    async def handle(self, event: OrderCreated) -> None:
+        # ❌ ERRADO: Operação síncrona bloqueando o event loop
+        time.sleep(5)  # Bloqueante!
+        
+        # ❌ ERRADO: I/O síncrono
+        with open('orders.txt', 'a') as f:  # Bloqueante!
+            f.write(f"{event.order_id}\n")
+        
+        # ❌ ERRADO: HTTP síncrono
+        import requests
+        requests.post("http://api/notify", json=event.to_dict())  # Bloqueante!
+
+# ✅ CORRETO: Operações assíncronas
+class OrderHandler(EventHandler):
+    async def handle(self, event: OrderCreated) -> None:
+        # ✅ CORRETO: Operação assíncrona
+        await asyncio.sleep(5)
+        
+        # ✅ CORRETO: I/O assíncrono
+        async with aiofiles.open('orders.txt', 'a') as f:
+            await f.write(f"{event.order_id}\n")
+        
+        # ✅ CORRETO: HTTP assíncrono
+        async with httpx.AsyncClient() as client:
+            await client.post("http://api/notify", json=event.to_dict())
+```
+
+#### ❌ Não ignore falhas silenciosamente
+
+```python
+# ❌ ERRADO: Ignorando erros silenciosamente
+class BadHandler(EventHandler):
+    async def handle(self, event: BaseEvent) -> None:
+        try:
+            await self._process(event)
+        except Exception:
+            pass  # ❌ NUNCA ignore erros silenciosamente!
+
+# ✅ CORRETO: Tratamento adequado de erros
+class GoodHandler(EventHandler):
+    async def handle(self, event: BaseEvent) -> None:
+        try:
+            await self._process(event)
+            
+        except ValidationError as e:
+            logger.error(
+                "Erro de validação ao processar evento",
+                extra={
+                    "event_id": str(event.event_id),
+                    "error": str(e)
+                },
+                exc_info=True
+            )
+            # Envia para DLQ - não vale a pena retry
+            raise UnrecoverableError(f"Validação falhou: {e}")
+            
+        except DatabaseError as e:
+            logger.warning(
+                "Erro temporário de banco de dados",
+                extra={"event_id": str(event.event_id)}
+            )
+            # Erro recuperável - permite retry
+            raise RecoverableError(f"DB error: {e}")
+            
+        except Exception as e:
+            logger.exception(
+                "Erro inesperado ao processar evento",
+                extra={
+                    "event_id": str(event.event_id),
+                    "event_type": event.event_type
+                }
+            )
+            raise
+```
+
+#### ❌ Não crie dependências circulares entre eventos
+
+```python
+# ❌ ERRADO: Dependência circular
+class UserCreatedHandler(EventHandler):
+    async def handle(self, event: UserCreated) -> None:
+        # Cria um pedido
+        order_event = OrderCreated(...)
+        await dispatcher.publish(order_event)  # ❌ Cria Order
+
+class OrderCreatedHandler(EventHandler):
+    async def handle(self, event: OrderCreated) -> None:
+        # Atualiza o usuário
+        user_event = UserUpdated(...)
+        await dispatcher.publish(user_event)  # ❌ Atualiza User
+
+# UserCreated -> OrderCreated -> UserUpdated -> OrderUpdated... ❌ Ciclo infinito!
+
+# ✅ CORRETO: Fluxo unidirecional e orquestração
+class UserCreatedHandler(EventHandler):
+    async def handle(self, event: UserCreated) -> None:
+        # Apenas cria recursos necessários, sem dependências circulares
+        await self._create_user_profile(event)
+        await self._send_welcome_email(event)
+
+class OrderOrchestrator:
+    """Orquestrador centralizado para evitar ciclos."""
+    
+    async def create_order_for_new_user(self, user_id: str) -> None:
+        # Orquestra o fluxo completo sem criar ciclos
+        order = await self._create_order(user_id)
+        await self._process_payment(order)
+        await self._notify_user(user_id, order)
+```
+
+#### ❌ Não use eventos para operações síncronas críticas
+
+```python
+# ❌ ERRADO: Usando eventos para operação síncrona crítica
+async def create_order(data: OrderCreate) -> Order:
+    # Cria o pedido
+    order = await order_repo.create(data)
+    
+    # ❌ ERRADO: Publica evento e espera processamento para retornar
+    event = OrderCreated(order_id=order.id, ...)
+    await dispatcher.publish(event)
+    
+    # ❌ Aguarda processamento assíncrono (pode demorar!)
+    await wait_for_order_processing(order.id)
+    
+    return order  # Cliente fica esperando processos assíncronos
+
+# ✅ CORRETO: Separa operações síncronas das assíncronas
+async def create_order(data: OrderCreate) -> Order:
+    # Operações síncronas críticas
+    order = await order_repo.create(data)
+    payment = await payment_service.authorize(order)  # Síncrono
+    
+    if not payment.authorized:
+        raise PaymentError("Pagamento não autorizado")
+    
+    # Retorna imediatamente para o cliente
+    response = Order(
+        id=order.id,
+        status="pending",
+        payment_status=payment.status
+    )
+    
+    # Publica evento para processamento assíncrono posterior
+    event = OrderCreated(order_id=order.id, ...)
+    await dispatcher.publish(event)  # Fire and forget
+    
+    return response  # Retorna rápido
+```
+
+#### ❌ Não esqueça de versionar eventos
+
+```python
+# ❌ ERRADO: Evento sem versão
+class ProductUpdated(DomainEvent):
+    product_id: str
+    name: str
+    price: float
+    # Sem versionamento!
+
+# Mais tarde adiciona campos...
+class ProductUpdated(DomainEvent):  # ❌ Quebra compatibilidade!
+    product_id: str
+    name: str
+    price: float
+    stock: int  # Campo novo quebra consumers antigos!
+
+# ✅ CORRETO: Versionamento adequado
+class ProductUpdatedV1(DomainEvent):
+    """Versão 1 do evento de atualização de produto."""
+    
+    event_version: str = Field(default="1.0.0")
+    
+    product_id: str
+    name: str
+    price: float
+
+class ProductUpdatedV2(DomainEvent):
+    """
+    Versão 2 do evento de atualização de produto.
+    
+    Changelog:
+    - v2.0.0: Adicionado campo stock
+    """
+    
+    event_version: str = Field(default="2.0.0")
+    
+    product_id: str
+    name: str
+    price: float
+    stock: int  # Novo campo
+
+# Handler que suporta ambas as versões
+class ProductHandler(EventHandler):
+    async def handle(self, event: DomainEvent) -> None:
+        if event.event_version.startswith("1."):
+            await self._handle_v1(event)
+        elif event.event_version.startswith("2."):
+            await self._handle_v2(event)
+        else:
+            raise ValueError(f"Versão não suportada: {event.event_version}")
+```
+
+---
+
+## 11. Referências e Recursos
+
+### 📚 **Bibliotecas Recomendadas**
+
+- **aiokafka**: Cliente Kafka assíncrono para Python
+- **aio-pika**: Cliente RabbitMQ assíncrono (AMQP)
+- **azure-servicebus**: SDK Azure Service Bus
+- **azure-eventhub**: SDK Azure Event Hub
+- **prometheus-client**: Métricas Prometheus
+- **structlog**: Logging estruturado
+- **tenacity**: Retry e circuit breaker avançados
+
+### 📖 **Padrões e Conceitos**
+
+- **Event Sourcing**: Armazena mudanças de estado como sequência de eventos
+- **CQRS**: Separação entre comandos (write) e queries (read)
+- **Saga Pattern**: Coordenação de transações distribuídas
+- **Outbox Pattern**: Garantia de entrega de eventos com consistência
+- **Event-Driven Architecture**: Arquitetura baseada em eventos
+
+### 🔗 **Links Úteis**
+
+- [Apache Kafka Documentation](https://kafka.apache.org/documentation/)
+- [RabbitMQ Tutorials](https://www.rabbitmq.com/getstarted.html)
+- [Azure Service Bus](https://docs.microsoft.com/azure/service-bus-messaging/)
+- [CloudEvents Specification](https://cloudevents.io/)
+- [Martin Fowler - Event-Driven Architecture](https://martinfowler.com/articles/201701-event-driven.html)
+
+---
+
+Esta regra estabelece padrões sólidos para integração com banco de dados em aplicações Python/FastAPI, garantindo código limpo, performático e manutenível.

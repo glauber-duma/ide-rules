@@ -1,0 +1,1025 @@
+---
+Rule: fastapi-middleware.mdc
+Description: Diretrizes para implementação de middlewares e interceptadores em FastAPI, cobrindo logging, autenticação, CORS, rate limiting e monitoramento.
+globs: ["**/middleware/**/*.py", "**/middlewares/**/*.py", "**/interceptors/**/*.py"]
+alwaysApply: false
+tags: ["fastapi", "api", "middleware", "interceptor"]
+Author: Glauber Duma
+Created: 2026-01
+---
+
+# FastAPI Project - Middlewares e Interceptors
+
+## 1. Objetivo
+
+Estabelecer padrões para implementação de middlewares em FastAPI, garantindo:
+- **Interceptação transversal** de requisições e respostas
+- **Logging estruturado** de todas operações
+- **Segurança robusta** com autenticação e autorização
+- **Performance** com cache e rate limiting
+- **Monitoramento** com métricas e telemetria
+
+---
+
+## 2. Arquitetura de Middlewares
+
+### 🗂️ **Estrutura de organização**
+
+```
+fastapi_project
+|---src/
+|.   |---api/
+|.        |---core/
+|.        |    |---middlewares/                       
+|.        |    |        |---__init__.py
+|.        |    |        |---base.py                     # Base middleware class
+|.        |    |        |---logging.py                  # Request/Response logging
+|.        |    |        |---authentication.py           # JWT authentication
+|.        |    |        |---authorization.py            # role-based access control
+|.        |    |        |---rate_limiting.py            # Rate limiting
+|.        |    |        |---cors.py                     # CORS handling
+|.        |    |        |---security.py                 # Security headers
+|.        |    |        |---compression.py              # Response compression
+|.        |    |        |---caching.py                  # Response caching
+|.        |    |        |---metrics.py                  # Metrics collection
+|.        |    |        |---error_handling.py           # Global Error Handling
+|.        |    |        |---request_id.py               # Request tracing
+|.        |    |---dependencies.py                      # FastAPI dependencies
+|.        |    |---config.py                            # Middleware configuration
+|--- main.py                                            # Middleware registration
+
+```
+
+### 🏗️ **Base Middleware**
+
+```Python
+# src/api/core/middleware/base.py
+"""
+Base middleware abstrato para reutilização
+"""
+from abc import ABC, abstractmethod
+from typing import Callable
+from starlette.types import ASGIApp
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+
+
+class AbstractMiddleware(BaseHTTPMiddleware, ABC):
+    """Classe base abstrata para middlewares reutilizáveis.
+    
+    Fornece estrutura comum e pontos de extensão para:
+    - Logging estruturado
+    - Métricas e monitoramento
+    - Tratamento de erros
+    """
+    
+    def __init__(self, app: ASGIApp):
+        super().__init__(app)
+    
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        """
+        Método principal de dispatch que chama o handler customizado.
+        
+        Args:
+            request: Requisição HTTP
+            call_next: Próximo middleware/handler na cadeia
+            
+        Returns:
+            Response: Resposta HTTP
+        """
+        return await self._handle(request, call_next)
+    
+    @abstractmethod
+    async def _handle(self, request: Request, call_next: Callable) -> Response:
+        """
+        Método abstrato que deve ser implementado por subclasses.
+        
+        Args:
+            request: Requisição HTTP
+            call_next: Próximo middleware/handler na cadeia
+            
+        Returns:
+            Response: Resposta HTTP processada
+        """
+        raise NotImplementedError("Subclasses devem implementar _handle")
+
+
+class ConditionalMiddleware(BaseHTTPMiddleware):
+    """Middleware que executa condicionalmente baseado em regras."""
+    
+    def __init__(self, app: ASGIApp, condition: Callable[[Request], bool]):
+        super().__init__(app)
+        self.condition = condition
+    
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        if self.condition(request):
+            return await self.process_request(request, call_next)
+        return await call_next(request)
+    
+    async def process_request(self, request: Request, call_next: Callable) -> Response:
+        """Override este método para processar requisição."""
+        return await call_next(request)
+
+```
+
+## 3. Middleware de logging
+
+### 📄 **Request/Response logging**
+
+```Python
+# src/api/core/middleware/logging.py
+"""
+Middleware de logging estruturado para requisições e respostas
+"""
+import logging
+import time
+import uuid
+from typing import Callable
+from starlette.requests import Request
+from starlette.responses import Response
+from .base import AbstractMiddleware
+
+logger = logging.getLogger("api.requests")
+
+
+class RequestLoggingMiddleware(AbstractMiddleware):
+    """Middleware para logging estruturado de requisições e respostas."""
+    
+    def __init__(self, app, log_request_body: bool = False, log_response_body: bool = False):
+        super().__init__(app)
+        self.log_request_body = log_request_body
+        self.log_response_body = log_response_body
+    
+    async def _handle(self, request: Request, call_next: Callable) -> Response:
+        # Gera ID único para rastreamento
+        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        request.state.request_id = request_id
+        
+        # Captura início
+        start_time = time.monotonic()
+        
+        # Dados da requisição
+        request_data = {
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "query_params": dict(request.query_params),
+            "client_host": request.client.host if request.client else None,
+            "user_agent": request.headers.get("user-agent"),
+        }
+        
+        # Log corpo da requisição se habilitado
+        if self.log_request_body and request.method in ("POST", "PUT", "PATCH"):
+            try:
+                body = await request.body()
+                request_data["body_size"] = len(body)
+                # Não loga corpo para segurança, apenas tamanho
+            except Exception:
+                pass
+        
+        try:
+            # Processa requisição
+            response: Response = await call_next(request)
+            status_code = response.status_code
+            
+        except Exception as exc:
+            # Log de erro
+            duration = (time.monotonic() - start_time) * 1000
+            logger.exception(
+                "Request failed",
+                extra={
+                    **request_data,
+                    "duration_ms": round(duration, 2),
+                    "error": str(exc),
+                }
+            )
+            raise
+        
+        else:
+            # Log de sucesso
+            duration = (time.monotonic() - start_time) * 1000
+            
+            log_data = {
+                **request_data,
+                "status_code": status_code,
+                "duration_ms": round(duration, 2),
+            }
+            
+            # Determina nível de log baseado no status
+            if status_code >= 500:
+                logger.error("Request completed with server error", extra=log_data)
+            elif status_code >= 400:
+                logger.warning("Request completed with client error", extra=log_data)
+            else:
+                logger.info("Request completed successfully", extra=log_data)
+            
+            # Adiciona request_id ao response header
+            response.headers["X-Request-ID"] = request_id
+            
+            return response
+
+```
+
+## 4. Middleware de segurança
+
+### 🔒 **Autenticação e Autorização**
+
+```Python
+# src/api/core/middleware/authentication.py
+"""
+Middleware de autenticação JWT
+"""
+import logging
+from typing import Optional, List
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from fastapi import status
+from jose import JWTError, jwt
+from .base import AbstractMiddleware
+
+logger = logging.getLogger("api.auth")
+
+
+class JWTAuthenticationMiddleware(AbstractMiddleware):
+    """Middleware para autenticação JWT automática."""
+    
+    def __init__(
+        self,
+        app,
+        secret_key: str,
+        algorithm: str = "HS256",
+        public_paths: Optional[List[str]] = None,
+        header_name: str = "Authorization",
+        header_prefix: str = "Bearer"
+    ):
+        super().__init__(app)
+        self.secret_key = secret_key
+        self.algorithm = algorithm
+        self.public_paths = public_paths or ["/docs", "/redoc", "/openapi.json", "/health"]
+        self.header_name = header_name
+        self.header_prefix = header_prefix
+    
+    def _is_public_path(self, path: str) -> bool:
+        """Verifica se o path é público."""
+        return any(path.startswith(public_path) for public_path in self.public_paths)
+    
+    async def _handle(self, request: Request, call_next) -> Response:
+        # Permite paths públicos
+        if self._is_public_path(request.url.path):
+            return await call_next(request)
+        
+        # Extrai token do header
+        auth_header = request.headers.get(self.header_name)
+        
+        if not auth_header:
+            return JSONResponse(
+                {"detail": "Token de autenticação não fornecido"},
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+        
+        # Valida formato do header
+        try:
+            scheme, token = auth_header.split()
+            if scheme.lower() != self.header_prefix.lower():
+                raise ValueError("Esquema de autenticação inválido")
+        except ValueError:
+            return JSONResponse(
+                {"detail": "Formato de token inválido"},
+                status_code=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        # Decodifica e valida JWT
+        try:
+            payload = jwt.decode(
+                token,
+                self.secret_key,
+                algorithms=[self.algorithm]
+            )
+            
+            # Armazena dados do usuário no request state
+            request.state.user = payload
+            request.state.user_id = payload.get("sub")
+            request.state.user_role = payload.get("role", "user")
+            
+            logger.debug(f"User authenticated: {payload.get('sub')}")
+            
+        except JWTError as exc:
+            logger.warning(f"JWT validation failed: {exc}")
+            return JSONResponse(
+                {"detail": "Token inválido ou expirado"},
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+        
+        return await call_next(request)
+
+
+class RoleBasedAuthorizationMiddleware(AbstractMiddleware):
+    """Middleware para autorização baseada em roles."""
+    
+    def __init__(self, app, role_path_mapping: dict):
+        """
+        Args:
+            role_path_mapping: Mapeamento de paths e roles requeridas
+                Exemplo: {"/admin": ["admin"], "/api/users": ["admin", "moderator"]}
+        """
+        super().__init__(app)
+        self.role_path_mapping = role_path_mapping
+    
+    async def _handle(self, request: Request, call_next) -> Response:
+        # Verifica se há role requerida para o path
+        required_roles = None
+        for path_prefix, roles in self.role_path_mapping.items():
+            if request.url.path.startswith(path_prefix):
+                required_roles = roles
+                break
+        
+        # Se não há role requerida, continua
+        if not required_roles:
+            return await call_next(request)
+        
+        # Verifica se usuário está autenticado
+        user_role = getattr(request.state, "user_role", None)
+        
+        if not user_role:
+            return JSONResponse(
+                {"detail": "Autenticação requerida"},
+                status_code=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        # Verifica autorização
+        if user_role not in required_roles:
+            return JSONResponse(
+                {"detail": "Permissão negada"},
+                status_code=status.HTTP_403_FORBIDDEN
+            )
+        
+        return await call_next(request)
+
+```
+
+### 🛡️ **Security Headers**
+
+```Python
+# src/api/core/middleware/security.py
+"""
+Middleware de cabeçalhos de segurança
+"""
+from typing import Dict, Optional
+from starlette.requests import Request
+from starlette.responses import Response
+from .base import AbstractMiddleware
+
+
+class SecurityHeadersMiddleware(AbstractMiddleware):
+    """Middleware para adicionar headers de segurança recomendados."""
+    
+    def __init__(
+        self,
+        app,
+        custom_headers: Optional[Dict[str, str]] = None,
+        enable_hsts: bool = True,
+        enable_csp: bool = True,
+        csp_policy: Optional[str] = None
+    ):
+        super().__init__(app)
+        self.custom_headers = custom_headers or {}
+        self.enable_hsts = enable_hsts
+        self.enable_csp = enable_csp
+        self.csp_policy = csp_policy or "default-src 'self'"
+    
+    async def _handle(self, request: Request, call_next) -> Response:
+        response: Response = await call_next(request)
+        
+        # Headers de segurança padrão
+        security_headers = {
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-XSS-Protection": "1; mode=block",
+            "Referrer-Policy": "strict-origin-when-cross-origin",
+            "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+        }
+        
+        # HSTS (apenas em HTTPS)
+        if self.enable_hsts and request.url.scheme == "https":
+            security_headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains; preload"
+            )
+        
+        # Content Security Policy
+        if self.enable_csp:
+            security_headers["Content-Security-Policy"] = self.csp_policy
+        
+        # Adiciona custom headers
+        security_headers.update(self.custom_headers)
+        
+        # Aplica headers (sem sobrescrever existentes)
+        for header, value in security_headers.items():
+            response.headers.setdefault(header, value)
+        
+        return response
+
+```
+
+## 5. Rate Limiting
+
+### ⏰ **Rate Limiting Middleware**
+
+```Python
+# src/api/core/middleware/rate_limiting.py
+"""
+Middleware de rate limiting com sliding window
+"""
+import time
+import asyncio
+from typing import Optional, Callable
+from collections import defaultdict
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from fastapi import status
+from .base import AbstractMiddleware
+
+
+class RateLimitMiddleware(AbstractMiddleware):
+    """Middleware para rate limiting por IP ou usuário."""
+    
+    def __init__(
+        self,
+        app,
+        limit: int = 100,
+        window_seconds: int = 60,
+        key_func: Optional[Callable[[Request], str]] = None
+    ):
+        """
+        Args:
+            limit: Número máximo de requisições permitidas
+            window_seconds: Janela de tempo em segundos
+            key_func: Função customizada para extrair chave (padrão: IP)
+        """
+        super().__init__(app)
+        self.limit = limit
+        self.window = window_seconds
+        self.key_func = key_func or self._default_key_func
+        self._store = defaultdict(lambda: {"count": 0, "window_start": time.time()})
+        self._lock = asyncio.Lock()
+    
+    def _default_key_func(self, request: Request) -> str:
+        """Extrai IP do cliente como chave padrão."""
+        # Considera proxy headers
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        
+        return request.client.host if request.client else "unknown"
+    
+    async def _handle(self, request: Request, call_next) -> Response:
+        key = self.key_func(request)
+        now = time.time()
+        
+        async with self._lock:
+            entry = self._store[key]
+            
+            # Reset window se expirou
+            if now - entry["window_start"] >= self.window:
+                entry["count"] = 0
+                entry["window_start"] = now
+            
+            # Incrementa contador
+            entry["count"] += 1
+            
+            # Verifica limite
+            if entry["count"] > self.limit:
+                # Calcula tempo de retry
+                retry_after = int(entry["window_start"] + self.window - now)
+                
+                return JSONResponse(
+                    {
+                        "detail": "Taxa de requisições excedida",
+                        "retry_after": retry_after
+                    },
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    headers={
+                        "Retry-After": str(retry_after),
+                        "X-RateLimit-Limit": str(self.limit),
+                        "X-RateLimit-Remaining": "0",
+                        "X-RateLimit-Reset": str(int(entry["window_start"] + self.window))
+                    }
+                )
+        
+        # Adiciona headers informativos
+        response = await call_next(request)
+        response.headers["X-RateLimit-Limit"] = str(self.limit)
+        response.headers["X-RateLimit-Remaining"] = str(max(0, self.limit - entry["count"]))
+        response.headers["X-RateLimit-Reset"] = str(int(entry["window_start"] + self.window))
+        
+        return response
+
+```
+
+## 6. Middleware de cache e performance
+
+### 🚀 **Response caching**
+
+```Python
+# src/api/core/middleware/caching.py
+"""
+Middleware de cache de respostas HTTP
+"""
+import hashlib
+import time
+from typing import Dict, Optional
+from starlette.requests import Request
+from starlette.responses import Response
+from .base import AbstractMiddleware
+
+
+class ResponseCacheMiddleware(AbstractMiddleware):
+    """Middleware para cache de respostas GET."""
+    
+    def __init__(
+        self,
+        app,
+        default_ttl: int = 300,
+        cache_methods: tuple = ("GET",),
+        exclude_paths: Optional[list] = None
+    ):
+        """
+        Args:
+            default_ttl: TTL padrão em segundos
+            cache_methods: Métodos HTTP a cachear
+            exclude_paths: Paths a excluir do cache
+        """
+        super().__init__(app)
+        self.default_ttl = default_ttl
+        self.cache_methods = cache_methods
+        self.exclude_paths = exclude_paths or ["/health", "/metrics"]
+        self._cache: Dict[str, tuple] = {}  # key -> (expires_at, status, headers, body)
+    
+    def _should_cache(self, request: Request) -> bool:
+        """Determina se requisição deve ser cacheada."""
+        # Verifica método
+        if request.method not in self.cache_methods:
+            return False
+        
+        # Verifica paths excluídos
+        if any(request.url.path.startswith(path) for path in self.exclude_paths):
+            return False
+        
+        # Não cachea se há Authorization header
+        if request.headers.get("Authorization"):
+            return False
+        
+        return True
+    
+    def _make_cache_key(self, request: Request) -> str:
+        """Gera chave de cache única."""
+        key_parts = [
+            request.method,
+            request.url.path,
+            str(request.url.query)
+        ]
+        key_string = ":".join(key_parts)
+        return hashlib.md5(key_string.encode()).hexdigest()
+    
+    async def _handle(self, request: Request, call_next) -> Response:
+        # Verifica se deve cachear
+        if not self._should_cache(request):
+            return await call_next(request)
+        
+        # Gera chave de cache
+        cache_key = self._make_cache_key(request)
+        
+        # Verifica cache
+        now = time.time()
+        if cache_key in self._cache:
+            expires_at, status_code, headers, body = self._cache[cache_key]
+            
+            # Retorna do cache se não expirou
+            if expires_at > now:
+                response = Response(
+                    content=body,
+                    status_code=status_code,
+                    headers=dict(headers)
+                )
+                response.headers["X-Cache"] = "HIT"
+                return response
+            else:
+                # Remove entrada expirada
+                del self._cache[cache_key]
+        
+        # Cache miss - processa requisição
+        response: Response = await call_next(request)
+        
+        # Apenas cachea respostas de sucesso
+        if 200 <= response.status_code < 300:
+            # Extrai corpo da resposta
+            body = b""
+            async for chunk in response.body_iterator:
+                body += chunk
+            
+            # Determina TTL (pode vir do header Cache-Control)
+            ttl = self.default_ttl
+            cache_control = response.headers.get("Cache-Control", "")
+            if "max-age=" in cache_control:
+                try:
+                    ttl = int(cache_control.split("max-age=")[1].split(",")[0])
+                except (ValueError, IndexError):
+                    pass
+            
+            # Armazena no cache
+            expires_at = now + ttl
+            headers_copy = dict(response.headers)
+            self._cache[cache_key] = (expires_at, response.status_code, headers_copy, body)
+            
+            # Cria nova resposta com corpo
+            response = Response(
+                content=body,
+                status_code=response.status_code,
+                headers=headers_copy
+            )
+        
+        response.headers["X-Cache"] = "MISS"
+        return response
+
+```
+
+## 7. Configuração e Registro
+
+### ⚙️ **Configuração Central**
+
+```Python
+# src/api/core/config.py
+"""
+Configuração central de middlewares
+"""
+from dataclasses import dataclass
+from typing import List, Dict, Optional
+
+
+@dataclass
+class MiddlewareConfig:
+    """Configuração centralizada de middlewares."""
+    
+    # Logging
+    enable_logging: bool = True
+    log_request_body: bool = False
+    log_response_body: bool = False
+    
+    # Autenticação
+    enable_auth: bool = True
+    auth_secret: str = "your-secret-key-change-in-production"
+    auth_algorithm: str = "HS256"
+    auth_public_paths: List[str] = None
+    
+    # Autorização
+    enable_authorization: bool = False
+    role_path_mapping: Dict[str, List[str]] = None
+    
+    # Security Headers
+    enable_security_headers: bool = True
+    enable_hsts: bool = True
+    enable_csp: bool = True
+    csp_policy: str = "default-src 'self'"
+    
+    # Rate Limiting
+    enable_rate_limit: bool = True
+    rate_limit_requests: int = 100
+    rate_limit_window: int = 60
+    
+    # Cache
+    enable_cache: bool = False
+    cache_ttl: int = 300
+    cache_exclude_paths: List[str] = None
+    
+    def __post_init__(self):
+        """Inicializa valores padrão."""
+        if self.auth_public_paths is None:
+            self.auth_public_paths = ["/docs", "/redoc", "/openapi.json", "/health"]
+        
+        if self.role_path_mapping is None:
+            self.role_path_mapping = {}
+        
+        if self.cache_exclude_paths is None:
+            self.cache_exclude_paths = ["/health", "/metrics"]
+
+```
+
+### 🔧 **Registro de Middlewares**
+
+```Python
+# main.py
+"""
+Registro central de middlewares na aplicação FastAPI
+"""
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+
+from src.api.core.config import MiddlewareConfig
+from src.api.core.middlewares.logging import RequestLoggingMiddleware
+from src.api.core.middlewares.authentication import (
+    JWTAuthenticationMiddleware,
+    RoleBasedAuthorizationMiddleware
+)
+from src.api.core.middlewares.security import SecurityHeadersMiddleware
+from src.api.core.middlewares.rate_limiting import RateLimitMiddleware
+from src.api.core.middlewares.caching import ResponseCacheMiddleware
+
+
+def setup_middlewares(app: FastAPI, config: MiddlewareConfig) -> None:
+    """
+    Configura todos os middlewares da aplicação.
+    
+    ORDEM IMPORTA:
+    1. CORS (primeiro para preflight)
+    2. Compression
+    3. Security Headers
+    4. Rate Limiting
+    5. Authentication
+    6. Authorization
+    7. Logging (último para capturar tudo)
+    8. Cache (após autenticação)
+    
+    Args:
+        app: Instância FastAPI
+        config: Configuração de middlewares
+    """
+    
+    # 1. CORS - deve ser o primeiro
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # Configurar adequadamente em produção
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining"]
+    )
+    
+    # 2. Compression
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
+    
+    # 3. Security Headers
+    if config.enable_security_headers:
+        app.add_middleware(
+            SecurityHeadersMiddleware,
+            enable_hsts=config.enable_hsts,
+            enable_csp=config.enable_csp,
+            csp_policy=config.csp_policy
+        )
+    
+    # 4. Rate Limiting
+    if config.enable_rate_limit:
+        app.add_middleware(
+            RateLimitMiddleware,
+            limit=config.rate_limit_requests,
+            window_seconds=config.rate_limit_window
+        )
+    
+    # 5. Authentication
+    if config.enable_auth:
+        app.add_middleware(
+            JWTAuthenticationMiddleware,
+            secret_key=config.auth_secret,
+            algorithm=config.auth_algorithm,
+            public_paths=config.auth_public_paths
+        )
+    
+    # 6. Authorization
+    if config.enable_authorization:
+        app.add_middleware(
+            RoleBasedAuthorizationMiddleware,
+            role_path_mapping=config.role_path_mapping
+        )
+    
+    # 7. Logging (após auth para ter user_id)
+    if config.enable_logging:
+        app.add_middleware(
+            RequestLoggingMiddleware,
+            log_request_body=config.log_request_body,
+            log_response_body=config.log_response_body
+        )
+    
+    # 8. Cache
+    if config.enable_cache:
+        app.add_middleware(
+            ResponseCacheMiddleware,
+            default_ttl=config.cache_ttl,
+            exclude_paths=config.cache_exclude_paths
+        )
+
+
+def create_app() -> FastAPI:
+    """Cria e configura aplicação FastAPI."""
+    app = FastAPI(
+        title="FastAPI Application",
+        version="1.0.0",
+        docs_url="/docs",
+        redoc_url="/redoc"
+    )
+    
+    # Configuração de middlewares
+    config = MiddlewareConfig(
+        enable_auth=True,
+        enable_rate_limit=True,
+        enable_cache=False,  # Desabilitado por padrão
+    )
+    
+    setup_middlewares(app, config)
+    
+    # Registra rotas aqui
+    # app.include_router(...)
+    
+    return app
+
+
+app = create_app()
+
+```
+
+## 8. Boas práticas
+
+### ✅ **DO`s - Práticas Recomendadas**
+
+```Python
+# ✅ Use ordem correta dos middlewares
+# IMPORTANTE: A ordem afeta o comportamento!
+def setup_middlewares_correct_order(app: FastAPI):
+    # 1. CORS primeiro (para preflight requests)
+    app.add_middleware(CORSMiddleware, ...)
+    
+    # 2. Compression
+    app.add_middleware(GZipMiddleware, ...)
+    
+    # 3. Security Headers
+    app.add_middleware(SecurityHeadersMiddleware)
+    
+    # 4. Rate Limiting (antes de autenticação)
+    app.add_middleware(RateLimitMiddleware, ...)
+    
+    # 5. Authentication
+    app.add_middleware(JWTAuthenticationMiddleware, ...)
+    
+    # 6. Logging (por último para capturar tudo)
+    app.add_middleware(RequestLoggingMiddleware)
+
+
+# ✅ Implemente middleware condicional
+class ConditionalCacheMiddleware(AbstractMiddleware):
+    async def _handle(self, request: Request, call_next):
+        # Apenas cachea GET sem autenticação
+        if request.method == "GET" and not request.headers.get("Authorization"):
+            return await self.cache_response(request, call_next)
+        return await call_next(request)
+
+
+# ✅ Use request.state para compartilhar dados entre middlewares
+class UserEnrichmentMiddleware(AbstractMiddleware):
+    async def _handle(self, request: Request, call_next):
+        # Middleware anterior já validou JWT
+        user_id = getattr(request.state, "user_id", None)
+        
+        if user_id:
+            # Carrega dados adicionais do usuário
+            user_data = await get_user_data(user_id)
+            request.state.user_data = user_data
+        
+        return await call_next(request)
+
+
+# ✅ Trate erros adequadamente
+class ErrorHandlingMiddleware(AbstractMiddleware):
+    async def _handle(self, request: Request, call_next):
+        try:
+            response = await call_next(request)
+            return response
+        except ValueError as exc:
+            logger.error(f"Validation error: {exc}")
+            return JSONResponse(
+                {"detail": str(exc)},
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as exc:
+            logger.exception("Unexpected error")
+            return JSONResponse(
+                {"detail": "Internal server error"},
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+# ✅ Adicione headers informativos
+class InformativeHeadersMiddleware(AbstractMiddleware):
+    async def _handle(self, request: Request, call_next):
+        response = await call_next(request)
+        
+        # Headers úteis para debugging e monitoramento
+        response.headers["X-Service-Version"] = "1.0.0"
+        response.headers["X-Response-Time"] = str(time.time())
+        response.headers["X-Request-ID"] = getattr(request.state, "request_id", "unknown")
+        
+        return response
+
+
+# ✅ Use async para operações I/O
+class AsyncDatabaseMiddleware(AbstractMiddleware):
+    async def _handle(self, request: Request, call_next):
+        # Usa await para operações assíncronas
+        user_data = await async_get_user_from_db(request.state.user_id)
+        request.state.user_data = user_data
+        return await call_next(request)
+
+```
+
+### ❌ **DONT`s - Práticas a Evitar**
+
+```Python
+# ❌ Não bloqueie o thread com operações síncronas
+class BadSyncMiddleware(AbstractMiddleware):
+    async def _handle(self, request: Request, call_next):
+        import time
+        time.sleep(5)  # NUNCA! Bloqueia toda a aplicação
+        return await call_next(request)
+
+# ✅ Use operações async
+class GoodAsyncMiddleware(AbstractMiddleware):
+    async def _handle(self, request: Request, call_next):
+        await asyncio.sleep(5)  # OK - não bloqueia
+        return await call_next(request)
+
+
+# ❌ Não ignore erros silenciosamente
+class BadErrorHandling(AbstractMiddleware):
+    async def _handle(self, request: Request, call_next):
+        try:
+            return await call_next(request)
+        except Exception:
+            pass  # NUNCA! Esconde erros
+        return Response("OK")
+
+# ✅ Logue e trate erros apropriadamente
+class GoodErrorHandling(AbstractMiddleware):
+    async def _handle(self, request: Request, call_next):
+        try:
+            return await call_next(request)
+        except Exception as exc:
+            logger.exception("Error in middleware")
+            raise  # Ou retorne resposta de erro apropriada
+
+
+# ❌ Não modifique request/response incorretamente
+class BadModification(AbstractMiddleware):
+    async def _handle(self, request: Request, call_next):
+        # NUNCA sobrescreva headers críticos sem motivo
+        response = await call_next(request)
+        response.headers.clear()  # NUNCA!
+        return response
+
+
+# ❌ Não faça operações pesadas em middlewares
+class BadHeavyOperation(AbstractMiddleware):
+    async def _handle(self, request: Request, call_next):
+        # Processamento pesado bloqueia todas as requests
+        result = heavy_cpu_intensive_task()  # EVITAR!
+        request.state.result = result
+        return await call_next(request)
+
+# ✅ Offload para background tasks ou workers
+from fastapi import BackgroundTasks
+
+class GoodBackgroundOperation(AbstractMiddleware):
+    async def _handle(self, request: Request, call_next):
+        response = await call_next(request)
+        # Executa em background após resposta
+        background_tasks = BackgroundTasks()
+        background_tasks.add_task(heavy_cpu_intensive_task)
+        return response
+
+
+# ❌ Não use estado mutável compartilhado sem locks
+class BadSharedState(AbstractMiddleware):
+    counter = 0  # Estado compartilhado sem proteção!
+    
+    async def _handle(self, request: Request, call_next):
+        self.counter += 1  # Race condition!
+        return await call_next(request)
+
+# ✅ Use locks para proteger estado compartilhado
+import asyncio
+
+class GoodSharedState(AbstractMiddleware):
+    def __init__(self, app):
+        super().__init__(app)
+        self.counter = 0
+        self._lock = asyncio.Lock()
+    
+    async def _handle(self, request: Request, call_next):
+        async with self._lock:
+            self.counter += 1
+        return await call_next(request)
+
+```
+
+---
+
+Esta regra estabelece padrões sólidos para implementação de middlewares em aplicações FastAPI, garantindo segurança, performance e manutenibilidade.

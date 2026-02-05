@@ -1,0 +1,2374 @@
+---
+Rule: fastapi-security.mdc
+Description: Diretrizes de segurança para APIs Python/FastAPI, baseado em práticas de aplicações modernas.
+globs: ["**/*.py"]
+rules: @fastapi-project,@python-style-guide,@python-logging
+alwaysApply: false
+tags: ["fastapi", "api", "security", "modern"]
+Author: Glauber Duma
+Created: 2026-01
+---
+
+# FastAPI Security - Diretrizes de Segurança para APIs Python
+
+Esta regra estabelece padrões de segurança para APIs baseados em análise de projetos reais e melhores práticas de segurança.
+
+## 🔒 **Autenticação e Autorização**
+
+### 1.1. JWT Autenticação e Autorização
+
+```python
+# src/app/core/configs/security.py
+"""
+Módulo de segurança para autenticação JWT e criptografia.
+Implementa funções para geração e validação de tokens, hashing de senhas
+e outras operações de segurança.
+"""
+
+from datetime import datetime, timedelta
+from typing import Any, Dict, Optional, Union
+
+from fastapi import HTTPException, status
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from pydantic import ValidationError
+
+from app.core.configs.config import settings
+
+
+# ==================== CONFIGURAÇÃO DE CRIPTOGRAFIA ====================
+
+# Context para hashing de senhas com bcrypt
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto",
+    bcrypt__rounds=12,  # Número de rounds (mais = mais seguro mas mais lento)
+)
+
+
+# ==================== HASHING DE SENHAS ====================
+
+def hash_password(password: str) -> str:
+    """
+    Cria hash de senha usando bcrypt.
+    
+    Args:
+        password: Senha em texto plano
+        
+    Returns:
+        str: Hash da senha
+        
+    Example:
+        >>> hashed = hash_password("minha_senha_segura")
+        >>> print(hashed)
+        $2b$12$...
+    """
+    return pwd_context.hash(password)
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """
+    Verifica se a senha corresponde ao hash.
+    
+    Args:
+        plain_password: Senha em texto plano
+        hashed_password: Hash armazenado
+        
+    Returns:
+        bool: True se a senha está correta
+        
+    Example:
+        >>> hashed = hash_password("senha123")
+        >>> verify_password("senha123", hashed)
+        True
+        >>> verify_password("senha_errada", hashed)
+        False
+    """
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception:
+        # Em caso de erro na verificação, sempre retornar False
+        return False
+
+
+def needs_rehash(hashed_password: str) -> bool:
+    """
+    Verifica se o hash da senha precisa ser atualizado.
+    Útil quando você muda o número de rounds do bcrypt.
+    
+    Args:
+        hashed_password: Hash armazenado
+        
+    Returns:
+        bool: True se precisa rehash
+    """
+    return pwd_context.needs_update(hashed_password)
+
+
+# ==================== GERAÇÃO DE TOKENS JWT ====================
+
+def create_access_token(
+    subject: Union[str, Any],
+    expires_delta: Optional[timedelta] = None,
+    additional_claims: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    Cria um token de acesso JWT.
+    
+    Args:
+        subject: Identificador do usuário (geralmente user_id)
+        expires_delta: Tempo de expiração customizado
+        additional_claims: Claims adicionais para incluir no token
+        
+    Returns:
+        str: Token JWT codificado
+        
+    Example:
+        >>> token = create_access_token(subject="user_123")
+        >>> print(token)
+        eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+    """
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(
+            minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
+        )
+    
+    # Claims obrigatórios
+    to_encode = {
+        "exp": expire,
+        "sub": str(subject),
+        "iat": datetime.utcnow(),
+        "type": "access",
+    }
+    
+    # Adicionar claims extras se fornecidos
+    if additional_claims:
+        to_encode.update(additional_claims)
+    
+    # Codificar token
+    encoded_jwt = jwt.encode(
+        to_encode,
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM,
+    )
+    
+    return encoded_jwt
+
+
+def create_refresh_token(
+    subject: Union[str, Any],
+    expires_delta: Optional[timedelta] = None,
+) -> str:
+    """
+    Cria um token de refresh JWT.
+    
+    Args:
+        subject: Identificador do usuário
+        expires_delta: Tempo de expiração customizado
+        
+    Returns:
+        str: Token JWT de refresh
+        
+    Example:
+        >>> refresh_token = create_refresh_token(subject="user_123")
+    """
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(
+            days=settings.REFRESH_TOKEN_EXPIRE_DAYS
+        )
+    
+    to_encode = {
+        "exp": expire,
+        "sub": str(subject),
+        "iat": datetime.utcnow(),
+        "type": "refresh",
+    }
+    
+    encoded_jwt = jwt.encode(
+        to_encode,
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM,
+    )
+    
+    return encoded_jwt
+
+
+def create_email_verification_token(email: str) -> str:
+    """
+    Cria token para verificação de email.
+    
+    Args:
+        email: Email para verificar
+        
+    Returns:
+        str: Token JWT de verificação
+    """
+    expire = datetime.utcnow() + timedelta(hours=24)
+    
+    to_encode = {
+        "exp": expire,
+        "sub": email,
+        "type": "email_verification",
+    }
+    
+    encoded_jwt = jwt.encode(
+        to_encode,
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM,
+    )
+    
+    return encoded_jwt
+
+
+def create_password_reset_token(email: str) -> str:
+    """
+    Cria token para reset de senha.
+    
+    Args:
+        email: Email do usuário
+        
+    Returns:
+        str: Token JWT de reset
+    """
+    expire = datetime.utcnow() + timedelta(hours=1)
+    
+    to_encode = {
+        "exp": expire,
+        "sub": email,
+        "type": "password_reset",
+    }
+    
+    encoded_jwt = jwt.encode(
+        to_encode,
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM,
+    )
+    
+    return encoded_jwt
+
+
+# ==================== VALIDAÇÃO DE TOKENS ====================
+
+def decode_token(token: str) -> Dict[str, Any]:
+    """
+    Decodifica e valida um token JWT.
+    
+    Args:
+        token: Token JWT para decodificar
+        
+    Returns:
+        Dict[str, Any]: Payload do token
+        
+    Raises:
+        HTTPException: Se token inválido ou expirado
+        
+    Example:
+        >>> token = create_access_token(subject="user_123")
+        >>> payload = decode_token(token)
+        >>> print(payload["sub"])
+        user_123
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Não foi possível validar as credenciais",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    try:
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+        )
+        return payload
+        
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token expirado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except jwt.JWTClaimsError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Claims do token inválidos",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except JWTError:
+        raise credentials_exception
+
+
+def verify_token_type(payload: Dict[str, Any], expected_type: str) -> None:
+    """
+    Verifica se o token é do tipo esperado.
+    
+    Args:
+        payload: Payload decodificado do token
+        expected_type: Tipo esperado (access, refresh, etc)
+        
+    Raises:
+        HTTPException: Se o tipo não corresponder
+    """
+    token_type = payload.get("type")
+    if token_type != expected_type:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Token inválido. Esperado tipo '{expected_type}', recebido '{token_type}'",
+        )
+
+
+def extract_user_id_from_token(token: str) -> str:
+    """
+    Extrai o ID do usuário de um token de acesso.
+    
+    Args:
+        token: Token JWT
+        
+    Returns:
+        str: ID do usuário
+        
+    Raises:
+        HTTPException: Se token inválido
+    """
+    payload = decode_token(token)
+    verify_token_type(payload, "access")
+    
+    user_id = payload.get("sub")
+    if user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token inválido: subject não encontrado",
+        )
+    
+    return user_id
+
+
+# ==================== PERMISSÕES E ROLES ====================
+
+class Permission:
+    """
+    Classe para definir permissões do sistema.
+    """
+    # Permissões de usuário
+    USER_READ = "user:read"
+    USER_WRITE = "user:write"
+    USER_DELETE = "user:delete"
+    
+    # Permissões de admin
+    ADMIN_READ = "admin:read"
+    ADMIN_WRITE = "admin:write"
+    ADMIN_DELETE = "admin:delete"
+    
+    # Permissões de conteúdo
+    CONTENT_CREATE = "content:create"
+    CONTENT_UPDATE = "content:update"
+    CONTENT_DELETE = "content:delete"
+    CONTENT_PUBLISH = "content:publish"
+
+
+# Mapeamento de roles para permissões
+ROLE_PERMISSIONS: Dict[str, list[str]] = {
+    "user": [
+        Permission.USER_READ,
+        Permission.CONTENT_CREATE,
+    ],
+    "moderator": [
+        Permission.USER_READ,
+        Permission.USER_WRITE,
+        Permission.CONTENT_CREATE,
+        Permission.CONTENT_UPDATE,
+        Permission.CONTENT_DELETE,
+        Permission.CONTENT_PUBLISH,
+    ],
+    "admin": [
+        Permission.USER_READ,
+        Permission.USER_WRITE,
+        Permission.USER_DELETE,
+        Permission.ADMIN_READ,
+        Permission.ADMIN_WRITE,
+        Permission.ADMIN_DELETE,
+        Permission.CONTENT_CREATE,
+        Permission.CONTENT_UPDATE,
+        Permission.CONTENT_DELETE,
+        Permission.CONTENT_PUBLISH,
+    ],
+}
+
+
+def get_permissions_for_role(role: str) -> list[str]:
+    """
+    Obtém todas as permissões para uma role.
+    
+    Args:
+        role: Nome da role
+        
+    Returns:
+        list[str]: Lista de permissões
+    """
+    return ROLE_PERMISSIONS.get(role, [])
+
+
+def has_permission(user_role: str, required_permission: str) -> bool:
+    """
+    Verifica se uma role tem uma permissão específica.
+    
+    Args:
+        user_role: Role do usuário
+        required_permission: Permissão necessária
+        
+    Returns:
+        bool: True se tem a permissão
+        
+    Example:
+        >>> has_permission("admin", Permission.USER_DELETE)
+        True
+        >>> has_permission("user", Permission.USER_DELETE)
+        False
+    """
+    user_permissions = get_permissions_for_role(user_role)
+    return required_permission in user_permissions
+
+
+# ==================== API KEY MANAGEMENT ====================
+
+import secrets
+
+
+def generate_api_key(length: int = 32) -> str:
+    """
+    Gera uma API key segura.
+    
+    Args:
+        length: Comprimento da chave em bytes
+        
+    Returns:
+        str: API key em formato hexadecimal
+        
+    Example:
+        >>> api_key = generate_api_key()
+        >>> print(len(api_key))
+        64
+    """
+    return secrets.token_hex(length)
+
+
+def hash_api_key(api_key: str) -> str:
+    """
+    Cria hash de API key para armazenamento seguro.
+    
+    Args:
+        api_key: API key em texto plano
+        
+    Returns:
+        str: Hash da API key
+    """
+    import hashlib
+    return hashlib.sha256(api_key.encode()).hexdigest()
+
+
+def verify_api_key(plain_key: str, hashed_key: str) -> bool:
+    """
+    Verifica se API key corresponde ao hash.
+    
+    Args:
+        plain_key: API key em texto plano
+        hashed_key: Hash armazenado
+        
+    Returns:
+        bool: True se a key está correta
+    """
+    return hash_api_key(plain_key) == hashed_key
+
+
+# ==================== RATE LIMITING ====================
+
+from typing import Dict
+from datetime import datetime
+
+
+class TokenBucket:
+    """
+    Implementação de Token Bucket para rate limiting.
+    """
+    
+    def __init__(self, capacity: int, refill_rate: float):
+        """
+        Args:
+            capacity: Número máximo de tokens
+            refill_rate: Tokens adicionados por segundo
+        """
+        self.capacity = capacity
+        self.refill_rate = refill_rate
+        self.tokens = capacity
+        self.last_refill = datetime.utcnow()
+    
+    def consume(self, tokens: int = 1) -> bool:
+        """
+        Tenta consumir tokens do bucket.
+        
+        Args:
+            tokens: Número de tokens a consumir
+            
+        Returns:
+            bool: True se foi possível consumir
+        """
+        self._refill()
+        
+        if self.tokens >= tokens:
+            self.tokens -= tokens
+            return True
+        
+        return False
+    
+    def _refill(self) -> None:
+        """Reabastece o bucket baseado no tempo decorrido."""
+        now = datetime.utcnow()
+        elapsed = (now - self.last_refill).total_seconds()
+        tokens_to_add = elapsed * self.refill_rate
+        
+        self.tokens = min(self.capacity, self.tokens + tokens_to_add)
+        self.last_refill = now
+
+
+# ==================== SECURITY UTILITIES ====================
+
+def constant_time_compare(val1: str, val2: str) -> bool:
+    """
+    Compara duas strings em tempo constante para prevenir timing attacks.
+    
+    Args:
+        val1: Primeira string
+        val2: Segunda string
+        
+    Returns:
+        bool: True se são iguais
+    """
+    import hmac
+    return hmac.compare_digest(val1, val2)
+
+
+def generate_secure_random_string(length: int = 32) -> str:
+    """
+    Gera string aleatória criptograficamente segura.
+    
+    Args:
+        length: Tamanho da string
+        
+    Returns:
+        str: String aleatória
+    """
+    return secrets.token_urlsafe(length)
+
+
+def mask_sensitive_data(data: str, visible_chars: int = 4) -> str:
+    """
+    Mascara dados sensíveis para logs ou exibição.
+    
+    Args:
+        data: Dados a mascarar
+        visible_chars: Número de caracteres visíveis no final
+        
+    Returns:
+        str: Dados mascarados
+        
+    Example:
+        >>> mask_sensitive_data("1234567890123456")
+        '************3456'
+    """
+    if len(data) <= visible_chars:
+        return "*" * len(data)
+    
+    masked_length = len(data) - visible_chars
+    return "*" * masked_length + data[-visible_chars:]
+```
+
+---
+
+## 🧹 **Input Validation e Sanitização**
+
+### 2.1. Input Sanitização
+
+```python
+# src/app/core/configs/validators.py
+"""
+Validadores customizados para sanitização e validação de inputs.
+Previne injection attacks e garante integridade dos dados.
+"""
+
+import html
+import re
+from typing import Any, Optional
+from urllib.parse import urlparse
+
+from fastapi import HTTPException, status
+from pydantic import field_validator
+
+
+# ==================== SQL INJECTION PREVENTION ====================
+
+class SQLInjectionValidator:
+    """
+    Validador para detectar tentativas de SQL injection.
+    """
+    
+    # Padrões suspeitos comuns em SQL injection
+    SUSPICIOUS_PATTERNS = [
+        r"(\bUNION\b.*\bSELECT\b)",
+        r"(\bINSERT\b.*\bINTO\b)",
+        r"(\bUPDATE\b.*\bSET\b)",
+        r"(\bDELETE\b.*\bFROM\b)",
+        r"(\bDROP\b.*\bTABLE\b)",
+        r"(\bEXEC\b|\bEXECUTE\b)",
+        r"(--|\#|\/\*)",
+        r"(\bOR\b.*=.*)",
+        r"(\';)",
+    ]
+    
+    @classmethod
+    def validate(cls, value: str) -> str:
+        """
+        Valida se o input contém padrões de SQL injection.
+        
+        Args:
+            value: String a validar
+            
+        Returns:
+            str: Valor validado
+            
+        Raises:
+            HTTPException: Se detectar padrão suspeito
+        """
+        if not value:
+            return value
+        
+        # Verificar padrões suspeitos
+        for pattern in cls.SUSPICIOUS_PATTERNS:
+            if re.search(pattern, value, re.IGNORECASE):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Input contém caracteres ou padrões não permitidos",
+                )
+        
+        return value
+
+
+# ==================== XSS PREVENTION ====================
+
+class XSSValidator:
+    """
+    Validador para prevenir ataques XSS.
+    """
+    
+    # Tags HTML perigosas
+    DANGEROUS_TAGS = [
+        "script", "iframe", "object", "embed", "applet",
+        "meta", "link", "style", "base", "form"
+    ]
+    
+    # Atributos perigosos
+    DANGEROUS_ATTRIBUTES = [
+        "onclick", "onerror", "onload", "onmouseover",
+        "onfocus", "onblur", "onchange", "javascript:"
+    ]
+    
+    @classmethod
+    def sanitize_html(cls, value: str, strip_all_tags: bool = False) -> str:
+        """
+        Sanitiza HTML removendo tags e atributos perigosos.
+        
+        Args:
+            value: HTML a sanitizar
+            strip_all_tags: Se True, remove todas as tags HTML
+            
+        Returns:
+            str: HTML sanitizado
+            
+        Example:
+            >>> XSSValidator.sanitize_html('<script>alert("xss")</script>Hello')
+            'Hello'
+        """
+        if not value:
+            return value
+        
+        if strip_all_tags:
+            # Remove todas as tags HTML
+            return re.sub(r'<[^>]*?>', '', value)
+        
+        # Escape HTML entities
+        sanitized = html.escape(value)
+        
+        return sanitized
+    
+    @classmethod
+    def validate(cls, value: str) -> str:
+        """
+        Valida se o input contém padrões de XSS.
+        
+        Args:
+            value: String a validar
+            
+        Returns:
+            str: Valor validado
+            
+        Raises:
+            HTTPException: Se detectar padrão suspeito
+        """
+        if not value:
+            return value
+        
+        value_lower = value.lower()
+        
+        # Verificar tags perigosas
+        for tag in cls.DANGEROUS_TAGS:
+            if f"<{tag}" in value_lower or f"</{tag}>" in value_lower:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Tag HTML não permitida: {tag}",
+                )
+        
+        # Verificar atributos perigosos
+        for attr in cls.DANGEROUS_ATTRIBUTES:
+            if attr in value_lower:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Atributo não permitido: {attr}",
+                )
+        
+        return value
+
+
+# ==================== PATH TRAVERSAL PREVENTION ====================
+
+class PathTraversalValidator:
+    """
+    Validador para prevenir ataques de path traversal.
+    """
+    
+    DANGEROUS_PATTERNS = [
+        r"\.\.",  # Parent directory
+        r"~",     # Home directory
+        r"\/\/",  # Double slash
+        r"\\\\",  # Double backslash
+    ]
+    
+    @classmethod
+    def validate(cls, path: str) -> str:
+        """
+        Valida se o caminho contém tentativas de path traversal.
+        
+        Args:
+            path: Caminho a validar
+            
+        Returns:
+            str: Caminho validado
+            
+        Raises:
+            HTTPException: Se detectar padrão suspeito
+        """
+        if not path:
+            return path
+        
+        # Verificar padrões suspeitos
+        for pattern in cls.DANGEROUS_PATTERNS:
+            if re.search(pattern, path):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Caminho contém caracteres não permitidos",
+                )
+        
+        # Verificar se começa com /
+        if path.startswith("/"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Caminho absoluto não permitido",
+            )
+        
+        return path
+    
+    @classmethod
+    def sanitize_filename(cls, filename: str) -> str:
+        """
+        Sanitiza nome de arquivo removendo caracteres perigosos.
+        
+        Args:
+            filename: Nome do arquivo
+            
+        Returns:
+            str: Nome sanitizado
+            
+        Example:
+            >>> PathTraversalValidator.sanitize_filename("../../etc/passwd")
+            'etcpasswd'
+        """
+        # Remove path traversal
+        filename = re.sub(r"\.\.+", "", filename)
+        
+        # Remove caracteres especiais mantendo apenas alfanuméricos, ponto e underscore
+        filename = re.sub(r"[^a-zA-Z0-9._-]", "", filename)
+        
+        # Limitar tamanho
+        filename = filename[:255]
+        
+        if not filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Nome de arquivo inválido",
+            )
+        
+        return filename
+
+
+# ==================== URL VALIDATION ====================
+
+class URLValidator:
+    """
+    Validador para URLs externas.
+    """
+    
+    ALLOWED_SCHEMES = ["http", "https"]
+    BLOCKED_DOMAINS = [
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "::1",
+    ]
+    
+    @classmethod
+    def validate(cls, url: str, allow_private: bool = False) -> str:
+        """
+        Valida URL externa.
+        
+        Args:
+            url: URL a validar
+            allow_private: Se True, permite IPs privados
+            
+        Returns:
+            str: URL validada
+            
+        Raises:
+            HTTPException: Se URL inválida ou perigosa
+        """
+        try:
+            parsed = urlparse(url)
+            
+            # Verificar scheme
+            if parsed.scheme not in cls.ALLOWED_SCHEMES:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Scheme não permitido: {parsed.scheme}",
+                )
+            
+            # Verificar domínios bloqueados
+            if not allow_private:
+                hostname = parsed.hostname
+                if hostname in cls.BLOCKED_DOMAINS:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Domínio não permitido",
+                    )
+                
+                # Verificar IPs privados
+                if cls._is_private_ip(hostname):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="IP privado não permitido",
+                    )
+            
+            return url
+            
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="URL inválida",
+            )
+    
+    @staticmethod
+    def _is_private_ip(hostname: str) -> bool:
+        """Verifica se é IP privado."""
+        import ipaddress
+        
+        try:
+            ip = ipaddress.ip_address(hostname)
+            return ip.is_private
+        except ValueError:
+            return False
+
+
+# ==================== EMAIL VALIDATION ====================
+
+class EmailValidator:
+    """
+    Validador avançado de emails.
+    """
+    
+    # Domínios temporários/descartáveis conhecidos
+    DISPOSABLE_DOMAINS = [
+        "tempmail.com", "10minutemail.com", "guerrillamail.com",
+        "mailinator.com", "trashmail.com", "throwaway.email",
+    ]
+    
+    @classmethod
+    def validate(
+        cls,
+        email: str,
+        block_disposable: bool = False,
+    ) -> str:
+        """
+        Valida email com verificações avançadas.
+        
+        Args:
+            email: Email a validar
+            block_disposable: Se True, bloqueia emails descartáveis
+            
+        Returns:
+            str: Email validado
+            
+        Raises:
+            HTTPException: Se email inválido
+        """
+        email = email.lower().strip()
+        
+        # Validação básica de formato
+        email_regex = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+        if not re.match(email_regex, email):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Formato de email inválido",
+            )
+        
+        # Verificar domínios descartáveis
+        if block_disposable:
+            domain = email.split("@")[1]
+            if domain in cls.DISPOSABLE_DOMAINS:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Domínio de email descartável não permitido",
+                )
+        
+        return email
+
+
+# ==================== PHONE VALIDATION ====================
+
+class PhoneValidator:
+    """
+    Validador de números de telefone.
+    """
+    
+    @classmethod
+    def validate_e164(cls, phone: str) -> str:
+        """
+        Valida número de telefone no formato E.164.
+        
+        Args:
+            phone: Número de telefone
+            
+        Returns:
+            str: Telefone validado
+            
+        Raises:
+            HTTPException: Se telefone inválido
+            
+        Example:
+            >>> PhoneValidator.validate_e164("+5511999999999")
+            '+5511999999999'
+        """
+        # Formato E.164: +[country code][number]
+        e164_regex = r"^\+[1-9]\d{1,14}$"
+        
+        if not re.match(e164_regex, phone):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Telefone deve estar no formato E.164 (+5511999999999)",
+            )
+        
+        return phone
+
+
+# ==================== INPUT SANITIZER GERAL ====================
+
+class InputSanitizer:
+    """
+    Classe para sanitização geral de inputs.
+    """
+    
+    @staticmethod
+    def sanitize_string(
+        value: str,
+        max_length: Optional[int] = None,
+        strip_html: bool = True,
+        lowercase: bool = False,
+    ) -> str:
+        """
+        Sanitiza string de forma geral.
+        
+        Args:
+            value: String a sanitizar
+            max_length: Comprimento máximo
+            strip_html: Se True, remove HTML
+            lowercase: Se True, converte para minúsculas
+            
+        Returns:
+            str: String sanitizada
+        """
+        if not value:
+            return value
+        
+        # Remover espaços extras
+        value = value.strip()
+        
+        # Remover HTML se necessário
+        if strip_html:
+            value = XSSValidator.sanitize_html(value, strip_all_tags=True)
+        
+        # Converter para minúsculas se necessário
+        if lowercase:
+            value = value.lower()
+        
+        # Limitar comprimento
+        if max_length and len(value) > max_length:
+            value = value[:max_length]
+        
+        return value
+    
+    @staticmethod
+    def sanitize_dict(
+        data: dict,
+        allowed_keys: Optional[list[str]] = None,
+    ) -> dict:
+        """
+        Sanitiza dicionário removendo chaves não permitidas.
+        
+        Args:
+            data: Dicionário a sanitizar
+            allowed_keys: Lista de chaves permitidas
+            
+        Returns:
+            dict: Dicionário sanitizado
+        """
+        if not allowed_keys:
+            return data
+        
+        return {k: v for k, v in data.items() if k in allowed_keys}
+```
+
+---
+
+### 2.2. File Upload Security
+
+```python
+# src/app/core/configs/file_security.py
+"""
+Validação e segurança para upload de arquivos.
+Implementa verificações de tipo, tamanho e conteúdo.
+"""
+
+import hashlib
+import io
+import magic
+import os
+from pathlib import Path
+from typing import BinaryIO, List, Optional
+
+from fastapi import HTTPException, UploadFile, status
+from PIL import Image
+
+
+# ==================== CONFIGURAÇÕES ====================
+
+class FileSecurityConfig:
+    """Configurações de segurança para arquivos."""
+    
+    # Tamanho máximo de arquivo (em bytes)
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+    MAX_IMAGE_SIZE = 5 * 1024 * 1024   # 5 MB
+    MAX_DOCUMENT_SIZE = 20 * 1024 * 1024  # 20 MB
+    
+    # Extensões permitidas por categoria
+    ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+    ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".txt"}
+    ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".webm"}
+    
+    # MIME types permitidos
+    ALLOWED_IMAGE_MIMES = {
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+    }
+    
+    ALLOWED_DOCUMENT_MIMES = {
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "text/plain",
+    }
+    
+    # Dimensões máximas para imagens
+    MAX_IMAGE_WIDTH = 4096
+    MAX_IMAGE_HEIGHT = 4096
+
+
+# ==================== VALIDADORES DE ARQUIVO ====================
+
+class FileValidator:
+    """
+    Validador principal para arquivos enviados.
+    """
+    
+    @staticmethod
+    async def validate_file_size(
+        file: UploadFile,
+        max_size: int = FileSecurityConfig.MAX_FILE_SIZE,
+    ) -> None:
+        """
+        Valida o tamanho do arquivo.
+        
+        Args:
+            file: Arquivo para validar
+            max_size: Tamanho máximo em bytes
+            
+        Raises:
+            HTTPException: Se arquivo muito grande
+        """
+        # Ler arquivo em chunks para não carregar tudo na memória
+        size = 0
+        chunk_size = 1024 * 1024  # 1 MB chunks
+        
+        while chunk := await file.read(chunk_size):
+            size += len(chunk)
+            if size > max_size:
+                await file.close()
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=f"Arquivo muito grande. Máximo permitido: {max_size / (1024*1024):.2f} MB",
+                )
+        
+        # Voltar ao início do arquivo
+        await file.seek(0)
+    
+    @staticmethod
+    def validate_extension(
+        filename: str,
+        allowed_extensions: set[str],
+    ) -> None:
+        """
+        Valida a extensão do arquivo.
+        
+        Args:
+            filename: Nome do arquivo
+            allowed_extensions: Conjunto de extensões permitidas
+            
+        Raises:
+            HTTPException: Se extensão não permitida
+        """
+        ext = Path(filename).suffix.lower()
+        
+        if ext not in allowed_extensions:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Extensão não permitida. Permitidas: {', '.join(allowed_extensions)}",
+            )
+    
+    @staticmethod
+    async def validate_mime_type(
+        file: UploadFile,
+        allowed_mimes: set[str],
+    ) -> str:
+        """
+        Valida o MIME type real do arquivo (não confia no header).
+        
+        Args:
+            file: Arquivo para validar
+            allowed_mimes: Conjunto de MIME types permitidos
+            
+        Returns:
+            str: MIME type detectado
+            
+        Raises:
+            HTTPException: Se MIME type não permitido
+        """
+        # Ler primeiros bytes para detectar tipo
+        header = await file.read(2048)
+        await file.seek(0)
+        
+        # Usar python-magic para detecção real de tipo
+        mime = magic.from_buffer(header, mime=True)
+        
+        if mime not in allowed_mimes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Tipo de arquivo não permitido: {mime}",
+            )
+        
+        return mime
+    
+    @staticmethod
+    def sanitize_filename(filename: str) -> str:
+        """
+        Sanitiza nome do arquivo removendo caracteres perigosos.
+        
+        Args:
+            filename: Nome do arquivo
+            
+        Returns:
+            str: Nome sanitizado
+        """
+        import re
+        import unicodedata
+        
+        # Normalizar unicode
+        filename = unicodedata.normalize("NFKD", filename)
+        filename = filename.encode("ascii", "ignore").decode("ascii")
+        
+        # Remover caracteres especiais exceto ponto, underscore e hífen
+        filename = re.sub(r"[^a-zA-Z0-9._-]", "_", filename)
+        
+        # Limitar tamanho
+        name, ext = os.path.splitext(filename)
+        if len(name) > 100:
+            name = name[:100]
+        
+        return f"{name}{ext}"
+    
+    @staticmethod
+    async def calculate_file_hash(
+        file: UploadFile,
+        algorithm: str = "sha256",
+    ) -> str:
+        """
+        Calcula hash do arquivo para detecção de duplicatas.
+        
+        Args:
+            file: Arquivo
+            algorithm: Algoritmo de hash (md5, sha256, etc)
+            
+        Returns:
+            str: Hash do arquivo
+        """
+        hasher = hashlib.new(algorithm)
+        
+        # Ler em chunks
+        while chunk := await file.read(8192):
+            hasher.update(chunk)
+        
+        await file.seek(0)
+        
+        return hasher.hexdigest()
+
+
+# ==================== VALIDADOR DE IMAGENS ====================
+
+class ImageValidator:
+    """
+    Validador específico para imagens.
+    """
+    
+    @staticmethod
+    async def validate_image(
+        file: UploadFile,
+        max_width: int = FileSecurityConfig.MAX_IMAGE_WIDTH,
+        max_height: int = FileSecurityConfig.MAX_IMAGE_HEIGHT,
+    ) -> tuple[int, int]:
+        """
+        Valida imagem completa.
+        
+        Args:
+            file: Arquivo de imagem
+            max_width: Largura máxima
+            max_height: Altura máxima
+            
+        Returns:
+            tuple[int, int]: Dimensões (largura, altura)
+            
+        Raises:
+            HTTPException: Se imagem inválida
+        """
+        # Validar tamanho
+        await FileValidator.validate_file_size(
+            file,
+            max_size=FileSecurityConfig.MAX_IMAGE_SIZE,
+        )
+        
+        # Validar extensão
+        FileValidator.validate_extension(
+            file.filename,
+            FileSecurityConfig.ALLOWED_IMAGE_EXTENSIONS,
+        )
+        
+        # Validar MIME type
+        await FileValidator.validate_mime_type(
+            file,
+            FileSecurityConfig.ALLOWED_IMAGE_MIMES,
+        )
+        
+        # Validar dimensões e integridade da imagem
+        try:
+            contents = await file.read()
+            image = Image.open(io.BytesIO(contents))
+            
+            width, height = image.size
+            
+            if width > max_width or height > max_height:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Dimensões da imagem excedem o máximo permitido: {max_width}x{max_height}",
+                )
+            
+            # Verificar se é uma imagem válida tentando carregar
+            image.verify()
+            
+            await file.seek(0)
+            
+            return width, height
+            
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Arquivo de imagem inválido: {str(e)}",
+            )
+    
+    @staticmethod
+    def strip_exif_data(image_bytes: bytes) -> bytes:
+        """
+        Remove dados EXIF da imagem (pode conter localização, etc).
+        
+        Args:
+            image_bytes: Bytes da imagem
+            
+        Returns:
+            bytes: Imagem sem EXIF
+        """
+        image = Image.open(io.BytesIO(image_bytes))
+        
+        # Remover EXIF data
+        data = list(image.getdata())
+        image_without_exif = Image.new(image.mode, image.size)
+        image_without_exif.putdata(data)
+        
+        # Converter de volta para bytes
+        output = io.BytesIO()
+        image_without_exif.save(output, format=image.format)
+        
+        return output.getvalue()
+
+
+# ==================== VALIDADOR DE DOCUMENTOS ====================
+
+class DocumentValidator:
+    """
+    Validador específico para documentos.
+    """
+    
+    @staticmethod
+    async def validate_document(file: UploadFile) -> str:
+        """
+        Valida documento.
+        
+        Args:
+            file: Arquivo de documento
+            
+        Returns:
+            str: MIME type detectado
+            
+        Raises:
+            HTTPException: Se documento inválido
+        """
+        # Validar tamanho
+        await FileValidator.validate_file_size(
+            file,
+            max_size=FileSecurityConfig.MAX_DOCUMENT_SIZE,
+        )
+        
+        # Validar extensão
+        FileValidator.validate_extension(
+            file.filename,
+            FileSecurityConfig.ALLOWED_DOCUMENT_EXTENSIONS,
+        )
+        
+        # Validar MIME type
+        mime = await FileValidator.validate_mime_type(
+            file,
+            FileSecurityConfig.ALLOWED_DOCUMENT_MIMES,
+        )
+        
+        return mime
+    
+    @staticmethod
+    async def scan_for_malware(file: UploadFile) -> bool:
+        """
+        Simula scan de malware.
+        Em produção, integrar com ClamAV ou serviço de scan.
+        
+        Args:
+            file: Arquivo para escanear
+            
+        Returns:
+            bool: True se seguro
+            
+        Raises:
+            HTTPException: Se malware detectado
+        """
+        # Placeholder - integrar com ClamAV em produção
+        # import clamd
+        # cd = clamd.ClamdUnixSocket()
+        # result = cd.scan_stream(await file.read())
+        
+        # Por enquanto, apenas verificações básicas
+        contents = await file.read()
+        await file.seek(0)
+        
+        # Verificar assinaturas suspeitas simples
+        suspicious_patterns = [
+            b"eval(",
+            b"exec(",
+            b"<script",
+            b"javascript:",
+        ]
+        
+        for pattern in suspicious_patterns:
+            if pattern in contents:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Conteúdo suspeito detectado no arquivo",
+                )
+        
+        return True
+
+
+# ==================== GERENCIADOR DE UPLOAD ====================
+
+class SecureFileUploader:
+    """
+    Gerenciador de upload seguro de arquivos.
+    """
+    
+    def __init__(self, upload_dir: str):
+        """
+        Args:
+            upload_dir: Diretório base para uploads
+        """
+        self.upload_dir = Path(upload_dir)
+        self.upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    async def save_image(
+        self,
+        file: UploadFile,
+        subfolder: Optional[str] = None,
+    ) -> tuple[str, dict]:
+        """
+        Salva imagem de forma segura.
+        
+        Args:
+            file: Arquivo de imagem
+            subfolder: Subpasta opcional
+            
+        Returns:
+            tuple[str, dict]: (caminho do arquivo, metadados)
+        """
+        # Validar imagem
+        width, height = await ImageValidator.validate_image(file)
+        
+        # Sanitizar nome
+        safe_filename = FileValidator.sanitize_filename(file.filename)
+        
+        # Calcular hash
+        file_hash = await FileValidator.calculate_file_hash(file)
+        
+        # Gerar nome único usando hash
+        ext = Path(safe_filename).suffix
+        unique_filename = f"{file_hash}{ext}"
+        
+        # Determinar caminho
+        if subfolder:
+            save_dir = self.upload_dir / subfolder
+            save_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            save_dir = self.upload_dir
+        
+        file_path = save_dir / unique_filename
+        
+        # Salvar arquivo
+        contents = await file.read()
+        
+        # Remover EXIF data
+        contents = ImageValidator.strip_exif_data(contents)
+        
+        with open(file_path, "wb") as f:
+            f.write(contents)
+        
+        # Metadados
+        metadata = {
+            "original_filename": file.filename,
+            "saved_filename": unique_filename,
+            "file_hash": file_hash,
+            "size": len(contents),
+            "width": width,
+            "height": height,
+            "mime_type": file.content_type,
+        }
+        
+        return str(file_path), metadata
+    
+    async def save_document(
+        self,
+        file: UploadFile,
+        subfolder: Optional[str] = None,
+    ) -> tuple[str, dict]:
+        """
+        Salva documento de forma segura.
+        
+        Args:
+            file: Arquivo de documento
+            subfolder: Subpasta opcional
+            
+        Returns:
+            tuple[str, dict]: (caminho do arquivo, metadados)
+        """
+        # Validar documento
+        mime = await DocumentValidator.validate_document(file)
+        
+        # Scan de malware
+        await DocumentValidator.scan_for_malware(file)
+        
+        # Sanitizar nome
+        safe_filename = FileValidator.sanitize_filename(file.filename)
+        
+        # Calcular hash
+        file_hash = await FileValidator.calculate_file_hash(file)
+        
+        # Gerar nome único
+        ext = Path(safe_filename).suffix
+        unique_filename = f"{file_hash}{ext}"
+        
+        # Determinar caminho
+        if subfolder:
+            save_dir = self.upload_dir / subfolder
+            save_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            save_dir = self.upload_dir
+        
+        file_path = save_dir / unique_filename
+        
+        # Salvar arquivo
+        contents = await file.read()
+        
+        with open(file_path, "wb") as f:
+            f.write(contents)
+        
+        # Metadados
+        metadata = {
+            "original_filename": file.filename,
+            "saved_filename": unique_filename,
+            "file_hash": file_hash,
+            "size": len(contents),
+            "mime_type": mime,
+        }
+        
+        return str(file_path), metadata
+```
+
+---
+
+## 🔒 **Security Headers e Middleware**
+
+### 3.1. Security Headers Middleware
+
+```python
+# src/app/api/middlewares/security.py
+"""
+Middleware de segurança para adicionar headers de proteção
+e implementar políticas de segurança.
+"""
+
+from typing import Callable
+
+from fastapi import Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware que adiciona headers de segurança às respostas.
+    
+    Headers implementados:
+    - X-Content-Type-Options: Previne MIME type sniffing
+    - X-Frame-Options: Previne clickjacking
+    - X-XSS-Protection: Proteção XSS (legacy)
+    - Content-Security-Policy: Política de segurança de conteúdo
+    - Strict-Transport-Security: Force HTTPS
+    - Referrer-Policy: Controla informações de referrer
+    - Permissions-Policy: Controla features do browser
+    """
+    
+    def __init__(
+        self,
+        app: ASGIApp,
+        enable_hsts: bool = True,
+        hsts_max_age: int = 31536000,  # 1 ano
+        hsts_include_subdomains: bool = True,
+        hsts_preload: bool = False,
+    ):
+        """
+        Args:
+            app: Aplicação ASGI
+            enable_hsts: Habilitar HSTS
+            hsts_max_age: Tempo de cache HSTS em segundos
+            hsts_include_subdomains: Incluir subdomínios no HSTS
+            hsts_preload: Habilitar HSTS preload
+        """
+        super().__init__(app)
+        self.enable_hsts = enable_hsts
+        self.hsts_max_age = hsts_max_age
+        self.hsts_include_subdomains = hsts_include_subdomains
+        self.hsts_preload = hsts_preload
+    
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable,
+    ) -> Response:
+        """Adiciona headers de segurança à resposta."""
+        response = await call_next(request)
+        
+        # Prevenir MIME type sniffing
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        
+        # Prevenir clickjacking
+        response.headers["X-Frame-Options"] = "DENY"
+        
+        # Proteção XSS (navegadores antigos)
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        
+        # Content Security Policy
+        csp_directives = [
+            "default-src 'self'",
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+            "style-src 'self' 'unsafe-inline'",
+            "img-src 'self' data: https:",
+            "font-src 'self' data:",
+            "connect-src 'self'",
+            "frame-ancestors 'none'",
+            "base-uri 'self'",
+            "form-action 'self'",
+        ]
+        response.headers["Content-Security-Policy"] = "; ".join(csp_directives)
+        
+        # HSTS - Force HTTPS
+        if self.enable_hsts:
+            hsts_value = f"max-age={self.hsts_max_age}"
+            if self.hsts_include_subdomains:
+                hsts_value += "; includeSubDomains"
+            if self.hsts_preload:
+                hsts_value += "; preload"
+            response.headers["Strict-Transport-Security"] = hsts_value
+        
+        # Referrer Policy
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        
+        # Permissions Policy (Feature Policy)
+        permissions_directives = [
+            "accelerometer=()",
+            "camera=()",
+            "geolocation=()",
+            "gyroscope=()",
+            "magnetometer=()",
+            "microphone=()",
+            "payment=()",
+            "usb=()",
+        ]
+        response.headers["Permissions-Policy"] = ", ".join(permissions_directives)
+        
+        # Remover header que expõe tecnologia
+        response.headers.pop("Server", None)
+        
+        return response
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware de rate limiting baseado em IP.
+    """
+    
+    def __init__(
+        self,
+        app: ASGIApp,
+        requests_per_minute: int = 60,
+        requests_per_hour: int = 1000,
+    ):
+        """
+        Args:
+            app: Aplicação ASGI
+            requests_per_minute: Requisições permitidas por minuto
+            requests_per_hour: Requisições permitidas por hora
+        """
+        super().__init__(app)
+        self.requests_per_minute = requests_per_minute
+        self.requests_per_hour = requests_per_hour
+        self.ip_requests: dict = {}
+    
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable,
+    ) -> Response:
+        """Verifica e aplica rate limiting."""
+        from datetime import datetime, timedelta
+        
+        # Obter IP do cliente
+        client_ip = request.client.host
+        
+        # Inicializar tracking para este IP
+        if client_ip not in self.ip_requests:
+            self.ip_requests[client_ip] = {
+                "minute": [],
+                "hour": [],
+            }
+        
+        now = datetime.utcnow()
+        
+        # Limpar requests antigos
+        minute_ago = now - timedelta(minutes=1)
+        hour_ago = now - timedelta(hours=1)
+        
+        self.ip_requests[client_ip]["minute"] = [
+            req_time for req_time in self.ip_requests[client_ip]["minute"]
+            if req_time > minute_ago
+        ]
+        
+        self.ip_requests[client_ip]["hour"] = [
+            req_time for req_time in self.ip_requests[client_ip]["hour"]
+            if req_time > hour_ago
+        ]
+        
+        # Verificar limites
+        minute_count = len(self.ip_requests[client_ip]["minute"])
+        hour_count = len(self.ip_requests[client_ip]["hour"])
+        
+        if minute_count >= self.requests_per_minute:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": {
+                        "code": 429,
+                        "message": "Muitas requisições. Tente novamente em 1 minuto.",
+                        "type": "rate_limit_exceeded",
+                    }
+                },
+                headers={
+                    "Retry-After": "60",
+                    "X-RateLimit-Limit": str(self.requests_per_minute),
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Reset": str(int((now + timedelta(minutes=1)).timestamp())),
+                },
+            )
+        
+        if hour_count >= self.requests_per_hour:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": {
+                        "code": 429,
+                        "message": "Limite horário excedido. Tente novamente mais tarde.",
+                        "type": "rate_limit_exceeded",
+                    }
+                },
+                headers={
+                    "Retry-After": "3600",
+                    "X-RateLimit-Limit": str(self.requests_per_hour),
+                    "X-RateLimit-Remaining": "0",
+                },
+            )
+        
+        # Registrar requisição
+        self.ip_requests[client_ip]["minute"].append(now)
+        self.ip_requests[client_ip]["hour"].append(now)
+        
+        # Processar request
+        response = await call_next(request)
+        
+        # Adicionar headers de rate limit
+        response.headers["X-RateLimit-Limit"] = str(self.requests_per_minute)
+        response.headers["X-RateLimit-Remaining"] = str(
+            self.requests_per_minute - minute_count - 1
+        )
+        
+        return response
+
+
+class IPWhitelistMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware para whitelist de IPs.
+    Útil para endpoints administrativos.
+    """
+    
+    def __init__(
+        self,
+        app: ASGIApp,
+        allowed_ips: list[str],
+        protected_paths: list[str],
+    ):
+        """
+        Args:
+            app: Aplicação ASGI
+            allowed_ips: Lista de IPs permitidos
+            protected_paths: Lista de paths protegidos
+        """
+        super().__init__(app)
+        self.allowed_ips = set(allowed_ips)
+        self.protected_paths = protected_paths
+    
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable,
+    ) -> Response:
+        """Verifica whitelist de IP."""
+        # Verificar se o path precisa de proteção
+        path_protected = any(
+            request.url.path.startswith(path)
+            for path in self.protected_paths
+        )
+        
+        if path_protected:
+            client_ip = request.client.host
+            
+            if client_ip not in self.allowed_ips:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "error": {
+                            "code": 403,
+                            "message": "Acesso negado",
+                            "type": "ip_not_allowed",
+                        }
+                    },
+                )
+        
+        return await call_next(request)
+
+
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware para limitar tamanho de requisição.
+    Previne ataques de DoS via upload de arquivos grandes.
+    """
+    
+    def __init__(
+        self,
+        app: ASGIApp,
+        max_size: int = 10 * 1024 * 1024,  # 10 MB
+    ):
+        """
+        Args:
+            app: Aplicação ASGI
+            max_size: Tamanho máximo em bytes
+        """
+        super().__init__(app)
+        self.max_size = max_size
+    
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable,
+    ) -> Response:
+        """Verifica tamanho da requisição."""
+        content_length = request.headers.get("content-length")
+        
+        if content_length and int(content_length) > self.max_size:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=413,
+                content={
+                    "error": {
+                        "code": 413,
+                        "message": f"Requisição muito grande. Máximo: {self.max_size / (1024*1024):.2f} MB",
+                        "type": "payload_too_large",
+                    }
+                },
+            )
+        
+        return await call_next(request)
+```
+
+---
+
+## 🛠️ **Security Testing**
+
+### 4.1. Security Test Suite
+
+```python
+# tests/security/test_authentication.py
+"""
+Testes de segurança para autenticação e autorização.
+Verifica vulnerabilidades comuns e garante implementação correta.
+"""
+
+import pytest
+from datetime import datetime, timedelta
+from fastapi import status
+from fastapi.testclient import TestClient
+from jose import jwt
+
+from app.core.configs.config import settings
+from app.core.configs.security import (
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+    hash_password,
+    verify_password,
+)
+
+
+# ==================== TESTES DE HASHING ====================
+
+class TestPasswordHashing:
+    """Testes de hashing de senhas."""
+    
+    def test_hash_password_creates_different_hashes(self):
+        """Mesmo password deve gerar hashes diferentes (salt)."""
+        password = "test_password_123"
+        hash1 = hash_password(password)
+        hash2 = hash_password(password)
+        
+        assert hash1 != hash2
+        assert verify_password(password, hash1)
+        assert verify_password(password, hash2)
+    
+    def test_verify_password_success(self):
+        """Verificação de senha correta deve retornar True."""
+        password = "correct_password"
+        hashed = hash_password(password)
+        
+        assert verify_password(password, hashed) is True
+    
+    def test_verify_password_failure(self):
+        """Verificação de senha incorreta deve retornar False."""
+        password = "correct_password"
+        wrong_password = "wrong_password"
+        hashed = hash_password(password)
+        
+        assert verify_password(wrong_password, hashed) is False
+    
+    def test_verify_password_with_invalid_hash(self):
+        """Verificação com hash inválido deve retornar False."""
+        password = "test_password"
+        invalid_hash = "invalid_hash_string"
+        
+        assert verify_password(password, invalid_hash) is False
+
+
+# ==================== TESTES DE JWT ====================
+
+class TestJWTTokens:
+    """Testes de geração e validação de JWT."""
+    
+    def test_create_access_token(self):
+        """Token de acesso deve ser criado corretamente."""
+        user_id = "user_123"
+        token = create_access_token(subject=user_id)
+        
+        assert token is not None
+        assert isinstance(token, str)
+        assert len(token) > 0
+    
+    def test_decode_valid_token(self):
+        """Token válido deve ser decodificado corretamente."""
+        user_id = "user_123"
+        token = create_access_token(subject=user_id)
+        
+        payload = decode_token(token)
+        
+        assert payload["sub"] == user_id
+        assert payload["type"] == "access"
+        assert "exp" in payload
+        assert "iat" in payload
+    
+    def test_decode_expired_token(self):
+        """Token expirado deve retornar erro."""
+        user_id = "user_123"
+        token = create_access_token(
+            subject=user_id,
+            expires_delta=timedelta(seconds=-1)  # Já expirado
+        )
+        
+        with pytest.raises(Exception) as exc_info:
+            decode_token(token)
+        
+        assert "expirado" in str(exc_info.value.detail).lower()
+    
+    def test_decode_invalid_token(self):
+        """Token inválido deve retornar erro."""
+        invalid_token = "invalid.token.here"
+        
+        with pytest.raises(Exception):
+            decode_token(invalid_token)
+    
+    def test_decode_tampered_token(self):
+        """Token modificado deve ser rejeitado."""
+        user_id = "user_123"
+        token = create_access_token(subject=user_id)
+        
+        # Modificar token
+        parts = token.split(".")
+        tampered_token = f"{parts[0]}.{parts[1][:-1]}X.{parts[2]}"
+        
+        with pytest.raises(Exception):
+            decode_token(tampered_token)
+    
+    def test_refresh_token_creation(self):
+        """Token de refresh deve ser criado com tempo de expiração correto."""
+        user_id = "user_123"
+        token = create_refresh_token(subject=user_id)
+        
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+        )
+        
+        assert payload["type"] == "refresh"
+        assert payload["sub"] == user_id
+
+
+# ==================== TESTES DE ENDPOINTS ====================
+
+@pytest.mark.asyncio
+class TestAuthenticationEndpoints:
+    """Testes dos endpoints de autenticação."""
+    
+    def test_login_with_valid_credentials(self, client: TestClient, test_user):
+        """Login com credenciais válidas deve retornar token."""
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": test_user["email"],
+                "password": test_user["password"],
+            },
+        )
+        
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert "access_token" in data
+        assert "refresh_token" in data
+        assert data["token_type"] == "bearer"
+    
+    def test_login_with_invalid_email(self, client: TestClient):
+        """Login com email inválido deve retornar erro."""
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": "nonexistent@example.com",
+                "password": "any_password",
+            },
+        )
+        
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    
+    def test_login_with_invalid_password(self, client: TestClient, test_user):
+        """Login com senha incorreta deve retornar erro."""
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": test_user["email"],
+                "password": "wrong_password",
+            },
+        )
+        
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    
+    def test_access_protected_route_without_token(self, client: TestClient):
+        """Acesso a rota protegida sem token deve retornar 401."""
+        response = client.get("/api/v1/users/me")
+        
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    
+    def test_access_protected_route_with_valid_token(
+        self,
+        client: TestClient,
+        auth_headers,
+    ):
+        """Acesso a rota protegida com token válido deve funcionar."""
+        response = client.get("/api/v1/users/me", headers=auth_headers)
+        
+        assert response.status_code == status.HTTP_200_OK
+    
+    def test_access_protected_route_with_expired_token(
+        self,
+        client: TestClient,
+    ):
+        """Acesso com token expirado deve retornar 401."""
+        expired_token = create_access_token(
+            subject="user_123",
+            expires_delta=timedelta(seconds=-1),
+        )
+        
+        headers = {"Authorization": f"Bearer {expired_token}"}
+        response = client.get("/api/v1/users/me", headers=headers)
+        
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+# ==================== TESTES DE AUTORIZAÇÃO ====================
+
+@pytest.mark.asyncio
+class TestAuthorization:
+    """Testes de autorização e permissões."""
+    
+    def test_admin_can_access_admin_route(
+        self,
+        client: TestClient,
+        admin_auth_headers,
+    ):
+        """Admin deve conseguir acessar rotas administrativas."""
+        response = client.get(
+            "/api/v1/admin/users",
+            headers=admin_auth_headers,
+        )
+        
+        assert response.status_code == status.HTTP_200_OK
+    
+    def test_regular_user_cannot_access_admin_route(
+        self,
+        client: TestClient,
+        auth_headers,
+    ):
+        """Usuário comum não deve acessar rotas administrativas."""
+        response = client.get(
+            "/api/v1/admin/users",
+            headers=auth_headers,
+        )
+        
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+    
+    def test_user_can_update_own_profile(
+        self,
+        client: TestClient,
+        auth_headers,
+        test_user,
+    ):
+        """Usuário deve poder atualizar próprio perfil."""
+        response = client.patch(
+            f"/api/v1/users/{test_user['id']}",
+            headers=auth_headers,
+            json={"full_name": "Updated Name"},
+        )
+        
+        assert response.status_code == status.HTTP_200_OK
+    
+    def test_user_cannot_update_other_user_profile(
+        self,
+        client: TestClient,
+        auth_headers,
+    ):
+        """Usuário não deve poder atualizar perfil de outro usuário."""
+        other_user_id = "other_user_id"
+        
+        response = client.patch(
+            f"/api/v1/users/{other_user_id}",
+            headers=auth_headers,
+            json={"full_name": "Hacked Name"},
+        )
+        
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+# ==================== TESTES DE SEGURANÇA ====================
+
+class TestSecurityVulnerabilities:
+    """Testes de vulnerabilidades comuns."""
+    
+    def test_sql_injection_in_login(self, client: TestClient):
+        """Sistema deve prevenir SQL injection no login."""
+        sql_injection_payloads = [
+            "' OR '1'='1",
+            "admin'--",
+            "' OR 1=1--",
+            "'; DROP TABLE users;--",
+        ]
+        
+        for payload in sql_injection_payloads:
+            response = client.post(
+                "/api/v1/auth/login",
+                json={
+                    "email": payload,
+                    "password": payload,
+                },
+            )
+            
+            # Não deve retornar 500 (erro de servidor)
+            # Deve retornar 401 ou 422
+            assert response.status_code in [
+                status.HTTP_401_UNAUTHORIZED,
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+            ]
+    
+    def test_xss_in_user_input(self, client: TestClient, auth_headers):
+        """Sistema deve sanitizar XSS em inputs."""
+        xss_payloads = [
+            "<script>alert('XSS')</script>",
+            "<img src=x onerror=alert('XSS')>",
+            "javascript:alert('XSS')",
+        ]
+        
+        for payload in xss_payloads:
+            response = client.post(
+                "/api/v1/posts",
+                headers=auth_headers,
+                json={
+                    "title": payload,
+                    "content": payload,
+                },
+            )
+            
+            # Deve aceitar mas sanitizar
+            if response.status_code == status.HTTP_201_CREATED:
+                data = response.json()
+                # Verificar que tags foram escapadas ou removidas
+                assert "<script>" not in data["title"]
+                assert "onerror=" not in data["title"]
+    
+    def test_rate_limiting(self, client: TestClient):
+        """Sistema deve implementar rate limiting."""
+        # Fazer múltiplas requisições rápidas
+        responses = []
+        for _ in range(100):
+            response = client.post(
+                "/api/v1/auth/login",
+                json={
+                    "email": "test@example.com",
+                    "password": "password",
+                },
+            )
+            responses.append(response.status_code)
+        
+        # Deve ter pelo menos um 429 (Too Many Requests)
+        assert status.HTTP_429_TOO_MANY_REQUESTS in responses
+    
+    def test_cors_headers(self, client: TestClient):
+        """Sistema deve ter headers CORS apropriados."""
+        response = client.options("/api/v1/users")
+        
+        assert "access-control-allow-origin" in response.headers
+        assert "access-control-allow-methods" in response.headers
+    
+    def test_security_headers(self, client: TestClient):
+        """Sistema deve incluir headers de segurança."""
+        response = client.get("/")
+        
+        security_headers = [
+            "x-content-type-options",
+            "x-frame-options",
+            "content-security-policy",
+            "strict-transport-security",
+        ]
+        
+        for header in security_headers:
+            assert header in response.headers.keys()
+
+
+# ==================== FIXTURES ====================
+
+@pytest.fixture
+def test_user(db_session):
+    """Cria usuário de teste."""
+    from app.data.models.user import User
+    
+    user = User(
+        email="test@example.com",
+        username="testuser",
+        full_name="Test User",
+        hashed_password=hash_password("test_password_123"),
+        is_active=True,
+        is_verified=True,
+        role="user",
+    )
+    
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "password": "test_password_123",
+    }
+
+
+@pytest.fixture
+def auth_headers(test_user):
+    """Gera headers de autenticação para testes."""
+    token = create_access_token(subject=test_user["id"])
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def admin_auth_headers(db_session):
+    """Gera headers de autenticação de admin."""
+    from app.data.models.user import User
+    
+    admin = User(
+        email="admin@example.com",
+        username="admin",
+        full_name="Admin User",
+        hashed_password=hash_password("admin_password"),
+        is_active=True,
+        is_verified=True,
+        role="admin",
+    )
+    
+    db_session.add(admin)
+    db_session.commit()
+    
+    token = create_access_token(subject=str(admin.id))
+    return {"Authorization": f"Bearer {token}"}
+```
+
+---
+
+## 📋 **Checklist de Segurança**
+
+### Implementação Obrigatória
+
+- [ ] **Autenticação JWT** com tokens de acesso e refresh
+- [ ] **Hashing de senhas** com bcrypt (mínimo 12 rounds)
+- [ ] **Validação de input** em todos os endpoints
+- [ ] **Sanitização de HTML** e prevenção de XSS
+- [ ] **Prevenção de SQL Injection** (usar ORM parametrizado)
+- [ ] **Rate Limiting** por IP e por usuário
+- [ ] **Security Headers** (CSP, HSTS, X-Frame-Options, etc)
+- [ ] **CORS** configurado corretamente
+- [ ] **HTTPS** obrigatório em produção
+- [ ] **Validação de upload de arquivos** (tipo, tamanho, conteúdo)
+- [ ] **Logs de segurança** para auditoria
+- [ ] **Tratamento seguro de erros** (não expor stack traces)
+- [ ] **Proteção contra CSRF** quando necessário
+- [ ] **Proteção de rotas administrativas** com IP whitelist
+- [ ] **Testes de segurança** automatizados
+
+### Boas Práticas
+
+- Nunca armazenar senhas em texto plano
+- Usar secrets manager para credenciais (AWS Secrets Manager, Azure Key Vault)
+- Implementar MFA para usuários privilegiados
+- Rotacionar secrets regularmente
+- Monitorar tentativas de login falhadas
+- Implementar account lockout após múltiplas tentativas
+- Usar tokens de curta duração (15-30 minutos)
+- Invalidar tokens em logout
+- Auditar todas as ações sensíveis
+- Manter dependências atualizadas
+- Usar ferramentas de análise estática (Bandit, Safety)
+- Realizar pentests regulares
+
+---
+
+**Esta rule deve ser rigorosamente seguida em todos os projetos FastAPI da organização.**

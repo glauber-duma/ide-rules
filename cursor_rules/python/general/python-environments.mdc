@@ -1,0 +1,1871 @@
+---
+Rule: python-environments.mdc
+Description: Diretrizes para configuração e gerenciamento de ambientes Python usando venv, conda, pyenv e docker, cobrindo desenvolvimento, teste e produção.
+globs: ["**/venv/**", "**/.venv/**", "**/conda.yml", "**/environment.yml", "**/.python-version", "**/Dockerfile", "**/docker-compose.yml"]
+alwaysApply: false
+tags: ["fastapi", "api", "environments"]
+Author: Glauber Duma
+Created: 2026-01
+---
+
+# Python - Configuração de Ambientes
+
+## 1. Objetivo
+
+Estabelecer padrões para configuração e gerenciamento de ambientes Python, garantindo:
+- **Isolamento completo** entre projetos e dependências
+- **Reprodutibilidade** entre ambientes de desenvolvimento, teste e produção
+- **Compatibilidade** de versões de Python e bibliotecas
+- **Facilidade de Setup** para novos desenvolvedores
+- **Portabilidade** entre diferentes máquinas e sistemas operacionais
+
+---
+
+## 2. Estratégias de Gerenciamento
+
+### ⚖️ **Comparação de Ferramentas**
+
+```python
+"""
+Comparação de ferramentas de gerenciamento de ambientes
+"""
+
+# ==== VENV (padrão built-in) ====
+# Prós: nativo, simples, universal, leve
+# Contras: apenas Python, sem gestão de versão do Python
+# Uso: projetos simples, desenvolvimento básico
+# Comando: python -m venv .venv
+
+# ==== VIRTUALENV ====
+# Prós: mais features que venv, suporta Python 2/3, mais rápido
+# Contras: dependência externa
+# Uso: projetos que precisam de features extras
+# Comando: virtualenv .venv
+
+# ==== PYENV + PYENV-VIRTUALENV ====
+# Prós: gerencia múltiplas versões do Python, troca fácil
+# Contras: complexidade adicional, apenas Unix-like
+# Uso: desenvolvimento com múltiplas versões Python
+# Comando: pyenv install 3.11.7 && pyenv virtualenv 3.11.7 myenv
+
+# ==== CONDA/MINICONDA ====
+# Prós: gerencia Python + libs nativas (C/C++), cross-platform
+# Contras: pesado, pode conflitar com pip
+# Uso: data science, dependências não-Python
+# Comando: conda create -n myenv python=3.11
+
+# ==== POETRY ====
+# Prós: gerencia dependências + ambiente, lock file, publicação
+# Contras: curva de aprendizado, opinativo
+# Uso: projetos modernos, bibliotecas Python
+# Comando: poetry install
+
+# ==== DOCKER ====
+# Prós: isolamento total, reprodutível, inclui SO
+# Contras: overhead, complexidade
+# Uso: produção, CI/CD, ambientes complexos
+# Comando: docker-compose up
+```
+
+## 3. Configuração com venv (Recomendado Básico)
+
+### 📂 **Estrutura de Projeto**
+
+```bash
+# estrutura de projeto com venv
+project/
+├── .venv/                  # ambiente virtual (não commitar)
+├── src/
+│   ├── __init__.py
+│   ├── main.py
+│   └── config/
+│       └── settings.py
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py
+│   └── test_main.py
+├── docs/
+│   └── README.md
+├── scripts/
+│   ├── setup.sh
+│   ├── setup.ps1
+│   └── activate.sh
+├── requirements/
+│   ├── base.txt
+│   ├── development.txt
+│   └── production.txt
+├── .python-version         # versão do Python (pyenv)
+├── .env                    # variáveis locais (não commitar)
+├── .env.example            # template de variáveis
+├── .gitignore
+├── Makefile
+└── README.md
+```
+
+### ⚙️ **Scripts de setup automatizado**
+
+```bash
+#!/bin/bash
+# scripts/setup.sh - Script para configurar ambiente com venv
+
+set -e  # Para em caso de erro
+
+echo "🐍 FastAPI Project Setup"
+echo "======================="
+
+# Cores para output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Verifica versão do Python
+REQUIRED_PYTHON="3.11"
+PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}' | cut -d'.' -f1,2)
+
+echo -e "${YELLOW}Verificando versão do Python...${NC}"
+if [ "$PYTHON_VERSION" != "$REQUIRED_PYTHON" ]; then
+    echo -e "${RED}✗ Python $REQUIRED_PYTHON é necessário (encontrado: $PYTHON_VERSION)${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ Python $REQUIRED_PYTHON detectado${NC}"
+
+# Cria ambiente virtual se não existir
+if [ ! -d ".venv" ]; then
+    echo -e "${YELLOW}Criando ambiente virtual...${NC}"
+    python3 -m venv .venv
+    echo -e "${GREEN}✓ Ambiente virtual criado${NC}"
+else
+    echo -e "${GREEN}✓ Ambiente virtual já existe${NC}"
+fi
+
+# Ativa ambiente virtual
+echo -e "${YELLOW}Ativando ambiente virtual...${NC}"
+source .venv/bin/activate
+
+# Atualiza pip
+echo -e "${YELLOW}Atualizando pip...${NC}"
+pip install --upgrade pip setuptools wheel
+
+# Instala dependências
+if [ -f "requirements/development.txt" ]; then
+    echo -e "${YELLOW}Instalando dependências de desenvolvimento...${NC}"
+    pip install -r requirements/development.txt
+elif [ -f "requirements.txt" ]; then
+    echo -e "${YELLOW}Instalando dependências...${NC}"
+    pip install -r requirements.txt
+else
+    echo -e "${RED}✗ Arquivo requirements não encontrado${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ Dependências instaladas${NC}"
+
+# Cria .env se não existir
+if [ ! -f ".env" ]; then
+    if [ -f ".env.example" ]; then
+        echo -e "${YELLOW}Criando arquivo .env...${NC}"
+        cp .env.example .env
+        echo -e "${GREEN}✓ Arquivo .env criado${NC}"
+        echo -e "${YELLOW}⚠️  Configure as variáveis em .env${NC}"
+    fi
+fi
+
+# Instala pre-commit hooks se disponível
+if command -v pre-commit &> /dev/null; then
+    echo -e "${YELLOW}Instalando pre-commit hooks...${NC}"
+    pre-commit install
+    echo -e "${GREEN}✓ Pre-commit hooks instalados${NC}"
+fi
+
+echo ""
+echo -e "${GREEN}✓ Setup concluído com sucesso!${NC}"
+echo ""
+echo "Para ativar o ambiente virtual:"
+echo "  source .venv/bin/activate"
+echo ""
+echo "Para executar a aplicação:"
+echo "  uvicorn src.main:app --reload"
+```
+
+```powershell
+# scripts/setup.ps1 - Script para configurar ambiente com venv (Windows)
+
+$ErrorActionPreference = "Stop"
+
+Write-Host "🐍 FastAPI Project Setup" -ForegroundColor Cyan
+Write-Host "=======================" -ForegroundColor Cyan
+
+# Verifica versão do Python
+$RequiredPython = "3.11"
+$PythonVersion = (python --version 2>&1 | Select-String -Pattern "\d+\.\d+").Matches.Value
+
+Write-Host "Verificando versão do Python..." -ForegroundColor Yellow
+if ($PythonVersion -ne $RequiredPython) {
+    Write-Host "✗ Python $RequiredPython é necessário (encontrado: $PythonVersion)" -ForegroundColor Red
+    exit 1
+}
+Write-Host "✓ Python $RequiredPython detectado" -ForegroundColor Green
+
+# Cria ambiente virtual se não existir
+if (-not (Test-Path ".venv")) {
+    Write-Host "Criando ambiente virtual..." -ForegroundColor Yellow
+    python -m venv .venv
+    Write-Host "✓ Ambiente virtual criado" -ForegroundColor Green
+} else {
+    Write-Host "✓ Ambiente virtual já existe" -ForegroundColor Green
+}
+
+# Ativa ambiente virtual
+Write-Host "Ativando ambiente virtual..." -ForegroundColor Yellow
+.\.venv\Scripts\Activate.ps1
+
+# Atualiza pip
+Write-Host "Atualizando pip..." -ForegroundColor Yellow
+python -m pip install --upgrade pip setuptools wheel
+
+# Instala dependências
+if (Test-Path "requirements/development.txt") {
+    Write-Host "Instalando dependências de desenvolvimento..." -ForegroundColor Yellow
+    pip install -r requirements/development.txt
+} elseif (Test-Path "requirements.txt") {
+    Write-Host "Instalando dependências..." -ForegroundColor Yellow
+    pip install -r requirements.txt
+} else {
+    Write-Host "✗ Arquivo requirements não encontrado" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "✓ Dependências instaladas" -ForegroundColor Green
+
+# Cria .env se não existir
+if (-not (Test-Path ".env")) {
+    if (Test-Path ".env.example") {
+        Write-Host "Criando arquivo .env..." -ForegroundColor Yellow
+        Copy-Item .env.example .env
+        Write-Host "✓ Arquivo .env criado" -ForegroundColor Green
+        Write-Host "⚠️  Configure as variáveis em .env" -ForegroundColor Yellow
+    }
+}
+
+# Instala pre-commit hooks se disponível
+if (Get-Command pre-commit -ErrorAction SilentlyContinue) {
+    Write-Host "Instalando pre-commit hooks..." -ForegroundColor Yellow
+    pre-commit install
+    Write-Host "✓ Pre-commit hooks instalados" -ForegroundColor Green
+}
+
+Write-Host ""
+Write-Host "✓ Setup concluído com sucesso!" -ForegroundColor Green
+Write-Host ""
+Write-Host "Para ativar o ambiente virtual:"
+Write-Host "  .\.venv\Scripts\Activate.ps1"
+Write-Host ""
+Write-Host "Para executar a aplicação:"
+Write-Host "  uvicorn src.main:app --reload"
+```
+
+### 📋 **Makefile para gerenciamento de ambiente**
+
+```makefile
+# Makefile para gerenciamento de ambiente FastAPI
+
+.PHONY: help install install-dev clean test lint format run docker-build docker-up
+
+# Variáveis
+PYTHON := python3
+VENV := .venv
+BIN := $(VENV)/bin
+PYTHON_BIN := $(BIN)/python
+PIP := $(BIN)/pip
+
+# Comandos
+
+help: ## Mostra esta ajuda
+	@echo "FastAPI Project - Comandos disponíveis:"
+	@echo ""
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+install: ## Instala dependências de produção
+	$(PYTHON) -m venv $(VENV)
+	$(PIP) install --upgrade pip setuptools wheel
+	$(PIP) install -r requirements/base.txt
+
+install-dev: ## Instala dependências de desenvolvimento
+	$(PYTHON) -m venv $(VENV)
+	$(PIP) install --upgrade pip setuptools wheel
+	$(PIP) install -r requirements/development.txt
+	$(BIN)/pre-commit install
+
+clean: ## Remove ambiente virtual e cache
+	rm -rf $(VENV)
+	find . -type d -name "__pycache__" -exec rm -rf {} +
+	find . -type d -name "*.egg-info" -exec rm -rf {} +
+	find . -type f -name "*.pyc" -delete
+	find . -type f -name "*.pyo" -delete
+	rm -rf .pytest_cache
+	rm -rf .coverage
+	rm -rf htmlcov
+	rm -rf dist
+	rm -rf build
+
+test: ## Executa testes
+	$(BIN)/pytest tests/ -v --cov=src --cov-report=html --cov-report=term
+
+test-fast: ## Executa testes em paralelo
+	$(BIN)/pytest tests/ -n auto
+
+lint: ## Executa linters (ruff, mypy)
+	$(BIN)/ruff check src/ tests/
+	$(BIN)/mypy src/
+
+format: ## Formata código (black, isort)
+	$(BIN)/black src/ tests/
+	$(BIN)/isort src/ tests/
+
+format-check: ## Verifica formatação sem modificar
+	$(BIN)/black --check src/ tests/
+	$(BIN)/isort --check-only src/ tests/
+
+run: ## Executa aplicação em modo desenvolvimento
+	$(BIN)/uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+
+run-prod: ## Executa aplicação em modo produção
+	$(BIN)/gunicorn src.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+
+docker-build: ## Constrói imagem Docker
+	docker build -t fastapi-app:latest .
+
+docker-up: ## Sobe containers com docker-compose
+	docker-compose up -d
+
+docker-down: ## Para containers
+	docker-compose down
+
+docker-logs: ## Mostra logs dos containers
+	docker-compose logs -f
+
+migrate: ## Executa migrações do banco
+	$(BIN)/alembic upgrade head
+
+migrate-create: ## Cria nova migração
+	@read -p "Migration name: " name; \
+	$(BIN)/alembic revision --autogenerate -m "$$name"
+
+shell: ## Abre shell Python com contexto da aplicação
+	$(BIN)/python
+
+deps-update: ## Atualiza dependências
+	$(PIP) install --upgrade pip
+	$(PIP) list --outdated
+
+security: ## Executa auditoria de segurança
+	$(BIN)/pip-audit
+	$(BIN)/bandit -r src/
+
+activate: ## Mostra comando para ativar ambiente
+	@echo "Execute: source $(BIN)/activate"
+```
+
+## 4. Configuração com Conda
+
+### 📋 **environment.yml Completo**
+
+```yaml
+# environment.yml - Configuração de ambiente Conda
+
+name: fastapi-project
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Python version
+  - python=3.11
+
+  # Core dependencies
+  - pip>=23.0
+
+  # System dependencies (se necessário)
+  - gcc_linux-64  # apenas Linux
+  - gxx_linux-64  # apenas Linux
+
+  # Python packages via conda
+  - numpy>=1.24.0
+  - pandas>=2.0.0
+
+  # Python packages via pip
+  - pip:
+      # Web framework
+      - fastapi==0.115.5
+      - uvicorn[standard]==0.30.6
+      - pydantic==2.8.2
+      - pydantic-settings==2.5.2
+
+      # Database
+      - sqlalchemy==2.0.36
+      - asyncpg==0.29.0
+      - alembic==1.13.2
+
+      # HTTP client
+      - httpx==0.27.2
+
+      # Security
+      - python-jose[cryptography]==3.3.0
+      - passlib[bcrypt]==1.7.4
+
+      # Utilities
+      - python-dotenv==1.0.1
+      - structlog==24.2.0
+
+      # Development
+      - pytest==8.3.2
+      - pytest-asyncio==0.23.8
+      - black==24.8.0
+      - ruff==0.6.5
+      - mypy==1.11.2
+
+variables:
+  # Environment variables
+  PYTHONPATH: $CONDA_PREFIX/src
+  ENVIRONMENT: development
+```
+
+### 📋 **Scripts Conda**
+
+```bash
+#!/bin/bash
+# scripts/setup_conda.sh - Script para configurar ambiente com Conda
+
+set -e
+
+echo "🐍 FastAPI Conda Setup"
+echo "====================="
+
+ENV_NAME="fastapi-project"
+
+# Verifica se conda está instalado
+if ! command -v conda &> /dev/null; then
+    echo "❌ Conda não encontrado. Instale Miniconda ou Anaconda primeiro."
+    echo "Download: https://docs.conda.io/en/latest/miniconda.html"
+    exit 1
+fi
+
+# Remove ambiente existente (opcional)
+if conda env list | grep -q "^${ENV_NAME} "; then
+    echo "⚠️  Ambiente ${ENV_NAME} já existe. Removendo..."
+    conda env remove -n ${ENV_NAME} -y
+fi
+
+# Cria ambiente do arquivo
+echo "📦 Criando ambiente Conda..."
+conda env create -f environment.yml
+
+echo ""
+echo "✅ Setup concluído!"
+echo ""
+echo "Para ativar o ambiente:"
+echo "  conda activate ${ENV_NAME}"
+echo ""
+echo "Para desativar:"
+echo "  conda deactivate"
+echo ""
+echo "Para atualizar o ambiente:"
+echo "  conda env update -f environment.yml --prune"
+```
+
+## 5. Configuração com Poetry
+
+### 📋 **Poetry Environment Setup**
+
+```bash
+#!/bin/bash
+# scripts/setup_poetry.sh - Script para configurar ambiente com Poetry
+
+set -e
+
+echo "🐍 FastAPI Poetry Setup"
+echo "======================"
+
+# Verifica se Poetry está instalado
+if ! command -v poetry &> /dev/null; then
+    echo "⚠️  Poetry não encontrado. Instalando..."
+    curl -sSL https://install.python-poetry.org | python3 -
+    echo "✅ Poetry instalado"
+fi
+
+# Configura Poetry para criar venv no projeto
+poetry config virtualenvs.in-project true
+
+# Verifica versão do Python
+REQUIRED_PYTHON="3.11"
+if [ -f ".python-version" ]; then
+    REQUIRED_PYTHON=$(cat .python-version)
+fi
+
+echo "📌 Versão Python requerida: ${REQUIRED_PYTHON}"
+
+# Instala dependências
+echo "📦 Instalando dependências..."
+poetry install
+
+# Ativa ambiente
+echo "✅ Setup concluído!"
+echo ""
+echo "Para ativar o ambiente:"
+echo "  poetry shell"
+echo ""
+echo "Para executar comandos sem ativar:"
+echo "  poetry run <comando>"
+echo ""
+echo "Para adicionar dependências:"
+echo "  poetry add <pacote>"
+```
+
+### ⚙️ **Configuração Poetry no pyproject.toml**
+
+```toml
+[tool.poetry]
+name = "fastapi-project"
+version = "0.1.0"
+description = "FastAPI project with best practices"
+authors = ["Glauber Duma <glauber.duma@empresa.com>"]
+readme = "README.md"
+packages = [{ include = "src" }]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.115.5"
+uvicorn = { version = "^0.30.6", extras = ["standard"] }
+pydantic = "^2.8.2"
+pydantic-settings = "^2.5.2"
+sqlalchemy = "^2.0.36"
+asyncpg = "^0.29.0"
+alembic = "^1.13.2"
+httpx = "^0.27.2"
+python-jose = { version = "^3.3.0", extras = ["cryptography"] }
+passlib = { version = "^1.7.4", extras = ["bcrypt"] }
+python-dotenv = "^1.0.1"
+structlog = "^24.2.0"
+redis = "^5.0.8"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.2"
+pytest-asyncio = "^0.23.8"
+pytest-cov = "^5.0.0"
+black = "^24.8.0"
+ruff = "^0.6.5"
+mypy = "^1.11.2"
+pre-commit = "^3.8.0"
+ipython = "^8.27.0"
+
+[tool.poetry.group.test.dependencies]
+pytest-xdist = "^3.6.1"
+respx = "^0.21.1"
+faker = "^26.2.0"
+
+[tool.poetry.scripts]
+dev = "uvicorn src.main:app --reload"
+prod = "gunicorn src.main:app -w 4 -k uvicorn.workers.UvicornWorker"
+
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.ruff]
+line-length = 88
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --cov=src --cov-report=html --cov-report=term"
+```
+
+## 6. Configuração com Docker
+
+### 📋 **Dockerfile multi-stage**
+
+```dockerfile
+# Dockerfile multi-stage para aplicação FastAPI Python
+
+# ====================================
+# Stage 1: Base
+# ====================================
+FROM python:3.11-slim as base
+
+# Variáveis de build
+ARG DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Instala dependências do sistema
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    postgresql-client \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Cria usuário não-root
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+WORKDIR /app
+
+# ====================================
+# Stage 2: Dependencies
+# ====================================
+FROM base as dependencies
+
+# Cria ambiente virtual
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copia requirements
+COPY requirements/base.txt requirements/production.txt ./requirements/
+
+# Instala dependências
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install -r requirements/production.txt
+
+# ====================================
+# Stage 3: Development
+# ====================================
+FROM dependencies as development
+
+# Copia requirements de desenvolvimento
+COPY requirements/development.txt ./requirements/
+
+# Instala dependências de desenvolvimento
+RUN pip install -r requirements/development.txt
+
+# Copia código fonte
+COPY --chown=appuser:appuser . .
+
+# Porta da aplicação
+EXPOSE 8000
+
+# Usuário não-root
+USER appuser
+
+# Comando de desenvolvimento com reload
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+# ====================================
+# Stage 4: Test
+# ====================================
+FROM dependencies as test
+
+# Copia requirements de teste
+COPY requirements/testing.txt ./requirements/
+
+# Instala dependências de teste
+RUN pip install -r requirements/testing.txt
+
+# Copia código fonte e testes
+COPY --chown=appuser:appuser . .
+
+USER appuser
+
+# Executa testes
+CMD ["pytest", "tests/", "-v", "--cov=src"]
+
+# ====================================
+# Stage 5: Production
+# ====================================
+FROM base as production
+
+# Copia ambiente virtual do stage dependencies
+COPY --from=dependencies /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copia apenas o código fonte necessário
+COPY --chown=appuser:appuser src/ ./src/
+COPY --chown=appuser:appuser alembic/ ./alembic/
+COPY --chown=appuser:appuser alembic.ini ./
+
+# Porta da aplicação
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Usuário não-root
+USER appuser
+
+# Comando de produção com gunicorn
+CMD ["gunicorn", "src.main:app", \
+     "--workers", "4", \
+     "--worker-class", "uvicorn.workers.UvicornWorker", \
+     "--bind", "0.0.0.0:8000", \
+     "--access-logfile", "-", \
+     "--error-logfile", "-", \
+     "--log-level", "info"]
+```
+
+### 📋 **docker-compose para desenvolvimento**
+
+```yaml
+# docker-compose.yml - Configuração Docker Compose para desenvolvimento
+
+version: '3.8'
+
+services:
+  # Aplicação FastAPI
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: fastapi-app-dev
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src:ro
+      - ./tests:/app/tests:ro
+      - ./alembic:/app/alembic:ro
+    environment:
+      - ENVIRONMENT=development
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/fastapi_dev
+      - REDIS_URL=redis://redis:6379/0
+      - LOG_LEVEL=DEBUG
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # PostgreSQL
+  postgres:
+    image: postgres:16-alpine
+    container_name: fastapi-postgres-dev
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=fastapi_dev
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: fastapi-redis-dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # PgAdmin (opcional)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: fastapi-pgadmin-dev
+    ports:
+      - "5050:80"
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@admin.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - app-network
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  pgadmin-data:
+
+networks:
+  app-network:
+    driver: bridge
+```
+
+### 📋 **docker-compose para testes**
+
+```yaml
+# docker-compose.test.yml - Configuração Docker Compose para testes
+
+version: '3.8'
+
+services:
+  # Testes
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: test
+    container_name: fastapi-test
+    environment:
+      - ENVIRONMENT=test
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres-test:5432/fastapi_test
+      - REDIS_URL=redis://redis-test:6379/0
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    networks:
+      - test-network
+    command: >
+      sh -c "
+        echo 'Aguardando banco de dados...' &&
+        sleep 5 &&
+        pytest tests/ -v --cov=src --cov-report=html --cov-report=term
+      "
+
+  # PostgreSQL para testes
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: fastapi-postgres-test
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=fastapi_test
+    tmpfs:
+      - /var/lib/postgresql/data  # Usa memória para performance
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - test-network
+
+  # Redis para testes
+  redis-test:
+    image: redis:7-alpine
+    container_name: fastapi-redis-test
+    tmpfs:
+      - /data  # Usa memória para performance
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - test-network
+
+networks:
+  test-network:
+    driver: bridge
+```
+
+## 7. Variáveis de Ambiente
+
+### 🔧 **Gestão de Configuração**
+
+```python
+# src/config/settings.py
+"""
+Configuração centralizada usando pydantic-settings.
+"""
+from functools import lru_cache
+from typing import Literal
+
+from pydantic import Field, PostgresDsn, RedisDsn, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """
+    Configurações da aplicação.
+    
+    Variáveis de ambiente são carregadas automaticamente do .env
+    e sobrescritas por variáveis de ambiente do sistema.
+    """
+    
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore"
+    )
+    
+    # ===== Ambiente =====
+    environment: Literal["development", "staging", "production"] = Field(
+        default="development",
+        description="Ambiente de execução"
+    )
+    
+    debug: bool = Field(
+        default=False,
+        description="Modo debug"
+    )
+    
+    # ===== Aplicação =====
+    app_name: str = Field(
+        default="FastAPI Application",
+        description="Nome da aplicação"
+    )
+    
+    app_version: str = Field(
+        default="0.1.0",
+        description="Versão da aplicação"
+    )
+    
+    api_prefix: str = Field(
+        default="/api/v1",
+        description="Prefixo das rotas da API"
+    )
+    
+    # ===== Servidor =====
+    host: str = Field(
+        default="0.0.0.0",
+        description="Host do servidor"
+    )
+    
+    port: int = Field(
+        default=8000,
+        description="Porta do servidor",
+        ge=1,
+        le=65535
+    )
+    
+    workers: int = Field(
+        default=4,
+        description="Número de workers",
+        ge=1
+    )
+    
+    # ===== Database =====
+    database_url: PostgresDsn = Field(
+        description="URL de conexão do PostgreSQL"
+    )
+    
+    database_pool_size: int = Field(
+        default=10,
+        description="Tamanho do pool de conexões",
+        ge=1
+    )
+    
+    database_max_overflow: int = Field(
+        default=20,
+        description="Máximo de conexões extras",
+        ge=0
+    )
+    
+    # ===== Redis =====
+    redis_url: RedisDsn = Field(
+        description="URL de conexão do Redis"
+    )
+    
+    redis_ttl: int = Field(
+        default=3600,
+        description="TTL padrão do cache (segundos)",
+        ge=0
+    )
+    
+    # ===== Security =====
+    secret_key: str = Field(
+        description="Chave secreta para JWT",
+        min_length=32
+    )
+    
+    access_token_expire_minutes: int = Field(
+        default=30,
+        description="Expiração do token de acesso (minutos)",
+        ge=1
+    )
+    
+    refresh_token_expire_days: int = Field(
+        default=7,
+        description="Expiração do token de refresh (dias)",
+        ge=1
+    )
+    
+    algorithm: str = Field(
+        default="HS256",
+        description="Algoritmo de criptografia JWT"
+    )
+    
+    # ===== CORS =====
+    cors_origins: list[str] = Field(
+        default=["http://localhost:3000"],
+        description="Origens permitidas para CORS"
+    )
+    
+    cors_allow_credentials: bool = Field(
+        default=True,
+        description="Permitir credenciais no CORS"
+    )
+    
+    # ===== Logging =====
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
+        default="INFO",
+        description="Nível de log"
+    )
+    
+    log_format: Literal["json", "console"] = Field(
+        default="console",
+        description="Formato do log"
+    )
+    
+    # ===== Monitoring =====
+    enable_metrics: bool = Field(
+        default=True,
+        description="Habilitar métricas Prometheus"
+    )
+    
+    enable_tracing: bool = Field(
+        default=False,
+        description="Habilitar tracing distribuído"
+    )
+    
+    @field_validator("environment")
+    @classmethod
+    def validate_environment(cls, v: str) -> str:
+        """Valida o ambiente."""
+        if v not in ["development", "staging", "production"]:
+            raise ValueError("Ambiente inválido")
+        return v
+    
+    @property
+    def is_development(self) -> bool:
+        """Verifica se é ambiente de desenvolvimento."""
+        return self.environment == "development"
+    
+    @property
+    def is_production(self) -> bool:
+        """Verifica se é ambiente de produção."""
+        return self.environment == "production"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """
+    Retorna instância singleton das configurações.
+    
+    Returns:
+        Settings: Configurações da aplicação
+    """
+    return Settings()
+
+
+# Instância global
+settings = get_settings()
+```
+
+```bash
+# .env.example - Template de variáveis de ambiente
+
+# ===== Ambiente =====
+ENVIRONMENT=development
+DEBUG=true
+
+# ===== Aplicação =====
+APP_NAME="FastAPI Application"
+APP_VERSION="0.1.0"
+API_PREFIX="/api/v1"
+
+# ===== Servidor =====
+HOST=0.0.0.0
+PORT=8000
+WORKERS=4
+
+# ===== Database =====
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/fastapi_dev
+DATABASE_POOL_SIZE=10
+DATABASE_MAX_OVERFLOW=20
+
+# ===== Redis =====
+REDIS_URL=redis://localhost:6379/0
+REDIS_TTL=3600
+
+# ===== Security =====
+SECRET_KEY=your-secret-key-here-min-32-characters
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+REFRESH_TOKEN_EXPIRE_DAYS=7
+ALGORITHM=HS256
+
+# ===== CORS =====
+CORS_ORIGINS=["http://localhost:3000","http://localhost:8080"]
+CORS_ALLOW_CREDENTIALS=true
+
+# ===== Logging =====
+LOG_LEVEL=DEBUG
+LOG_FORMAT=console
+
+# ===== Monitoring =====
+ENABLE_METRICS=true
+ENABLE_TRACING=false
+```
+
+## 8. CI/CD Integration
+
+### 🚀 **GitHub Actions com múltiplos ambientes**
+
+```yaml
+# .github/workflows/environment-matrix.yml
+
+name: Environment Matrix CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # ===== Teste em múltiplos ambientes =====
+  test-matrix:
+    name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.12"]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: 'requirements/*.txt'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements/testing.txt
+      
+      - name: Run tests
+        run: |
+          pytest tests/ -v --cov=src --cov-report=xml
+      
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          flags: ${{ matrix.os }}-${{ matrix.python-version }}
+  
+  # ===== Teste com Docker =====
+  test-docker:
+    name: Test with Docker
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Build test image
+        run: |
+          docker build --target test -t fastapi-test:latest .
+      
+      - name: Run tests in Docker
+        run: |
+          docker-compose -f docker-compose.test.yml up --abort-on-container-exit
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          docker-compose -f docker-compose.test.yml down -v
+  
+  # ===== Linting e Security =====
+  quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements/development.txt
+      
+      - name: Run Ruff
+        run: ruff check src/ tests/
+      
+      - name: Run Black
+        run: black --check src/ tests/
+      
+      - name: Run MyPy
+        run: mypy src/
+      
+      - name: Security audit
+        run: |
+          pip-audit
+          bandit -r src/
+  
+  # ===== Build e Push Docker =====
+  build-docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [test-matrix, test-docker, quality]
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: production
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/fastapi-app:latest
+            ${{ secrets.DOCKER_USERNAME }}/fastapi-app:${{ github.sha }}
+          cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/fastapi-app:buildcache
+          cache-to: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/fastapi-app:buildcache,mode=max
+```
+
+## 9. Boas Práticas
+
+### ✅ **DO's - Práticas Recomendadas**
+
+#### ✅ Use arquivos .python-version para especificar versões do Python
+
+```bash
+# .python-version
+3.11.7
+
+# Uso com pyenv
+pyenv install 3.11.7
+pyenv local 3.11.7  # cria .python-version automaticamente
+
+# Uso com Poetry
+poetry env use 3.11.7
+
+# ✅ CORRETO: Especifica versão exata no README
+# README.md
+## Requisitos
+- Python 3.11.7 (especificado em .python-version)
+- pip >= 23.0
+
+# ✅ CORRETO: Valida versão no script de setup
+# scripts/setup.sh
+REQUIRED_VERSION=$(cat .python-version)
+CURRENT_VERSION=$(python --version | awk '{print $2}')
+if [ "$CURRENT_VERSION" != "$REQUIRED_VERSION" ]; then
+    echo "❌ Python $REQUIRED_VERSION necessário"
+    exit 1
+fi
+```
+
+#### ✅ Sempre use ambientes virtuais
+
+```python
+# ✅ CORRETO: Criar ambiente virtual antes de instalar
+python -m venv .venv
+source .venv/bin/activate  # Linux/Mac
+.venv\Scripts\activate     # Windows
+pip install -r requirements.txt
+
+# ✅ CORRETO: Verificar se está em venv
+import sys
+
+def is_venv() -> bool:
+    """Verifica se está executando em ambiente virtual."""
+    return (
+        hasattr(sys, 'real_prefix') or
+        (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix)
+    )
+
+if not is_venv():
+    print("⚠️ Não está em ambiente virtual!")
+    sys.exit(1)
+
+# ✅ CORRETO: Scripts verificam venv automaticamente
+# scripts/check_venv.py
+import sys
+
+if not hasattr(sys, 'real_prefix') and sys.base_prefix == sys.prefix:
+    print("❌ Execute dentro de um ambiente virtual!")
+    print("   python -m venv .venv")
+    print("   source .venv/bin/activate")
+    sys.exit(1)
+```
+
+#### ✅ Documente setup no README.md
+
+```markdown
+# README.md - Exemplo de documentação completa
+
+## 🚀 Quick Start
+
+### Pré-requisitos
+- Python 3.11.7 (veja `.python-version`)
+- PostgreSQL 16+
+- Redis 7+
+
+### Setup Local
+
+#### Opção 1: Setup Automático
+\`\`\`bash
+# Linux/macOS
+./scripts/setup.sh
+
+# Windows
+.\scripts\setup.ps1
+\`\`\`
+
+#### Opção 2: Setup Manual
+\`\`\`bash
+# 1. Criar ambiente virtual
+python -m venv .venv
+
+# 2. Ativar ambiente
+source .venv/bin/activate  # Linux/macOS
+.venv\Scripts\activate     # Windows
+
+# 3. Instalar dependências
+pip install -r requirements/development.txt
+
+# 4. Copiar variáveis de ambiente
+cp .env.example .env
+
+# 5. Editar .env com suas configurações
+nano .env
+
+# 6. Executar migrações
+alembic upgrade head
+
+# 7. Executar aplicação
+uvicorn src.main:app --reload
+\`\`\`
+
+### Setup com Docker
+\`\`\`bash
+# Subir todos os serviços
+docker-compose up -d
+
+# Ver logs
+docker-compose logs -f app
+
+# Parar serviços
+docker-compose down
+\`\`\`
+
+### Setup com Make
+\`\`\`bash
+# Ver comandos disponíveis
+make help
+
+# Instalar dependências de dev
+make install-dev
+
+# Executar testes
+make test
+
+# Executar aplicação
+make run
+\`\`\`
+```
+
+#### ✅ Use scripts automatizados
+
+```python
+# scripts/dev.py
+"""Script de desenvolvimento com hot-reload."""
+import subprocess
+import sys
+from pathlib import Path
+
+
+def check_environment() -> bool:
+    """Verifica se ambiente está configurado."""
+    venv_path = Path(".venv")
+    env_file = Path(".env")
+    
+    if not venv_path.exists():
+        print("❌ Ambiente virtual não encontrado")
+        print("   Execute: python -m venv .venv")
+        return False
+    
+    if not env_file.exists():
+        print("⚠️  Arquivo .env não encontrado")
+        print("   Copiando .env.example...")
+        Path(".env.example").read_text()
+        env_file.write_text(Path(".env.example").read_text())
+    
+    return True
+
+
+def run_dev_server() -> None:
+    """Executa servidor de desenvolvimento."""
+    if not check_environment():
+        sys.exit(1)
+    
+    print("🚀 Iniciando servidor de desenvolvimento...")
+    subprocess.run([
+        "uvicorn",
+        "src.main:app",
+        "--reload",
+        "--host", "0.0.0.0",
+        "--port", "8000",
+        "--log-level", "debug"
+    ])
+
+
+if __name__ == "__main__":
+    run_dev_server()
+```
+
+#### ✅ Configure variáveis de ambiente adequadamente
+
+```python
+# ✅ CORRETO: Hierarquia de configuração
+# 1. Valores padrão no código
+# 2. .env file
+# 3. Variáveis de ambiente do sistema
+# 4. Argumentos de linha de comando (maior prioridade)
+
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    database_url: str = "sqlite:///./default.db"  # Padrão
+    
+    model_config = {
+        "env_file": ".env",  # Carrega de .env
+        "env_file_encoding": "utf-8",
+        "extra": "ignore"
+    }
+
+# ✅ CORRETO: Validação de configurações
+settings = Settings()
+
+if settings.is_production and "sqlite" in settings.database_url:
+    raise ValueError("SQLite não pode ser usado em produção!")
+
+# ✅ CORRETO: Configurações por ambiente
+# .env.development
+ENVIRONMENT=development
+DATABASE_URL=postgresql://localhost/dev_db
+DEBUG=true
+
+# .env.production
+ENVIRONMENT=production
+DATABASE_URL=postgresql://prod-server/prod_db
+DEBUG=false
+```
+
+#### ✅ Use .gitignore apropriado
+
+```bash
+# .gitignore completo para projetos Python
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# ===== Virtual Environments =====
+venv/
+.venv/
+env/
+ENV/
+.env
+.venv*/
+
+# ===== IDEs =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ===== Testing =====
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ===== Build =====
+build/
+dist/
+*.egg-info/
+*.egg
+
+# ===== Database =====
+*.db
+*.sqlite
+*.sqlite3
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== Environment =====
+.env
+.env.local
+.env.*.local
+
+# ===== Secrets =====
+secrets/
+*.pem
+*.key
+```
+
+#### ✅ Documente dependências de sistema
+
+```markdown
+# docs/system-dependencies.md
+
+## Dependências de Sistema
+
+### Ubuntu/Debian
+\`\`\`bash
+sudo apt-get update
+sudo apt-get install -y \\
+    python3.11 \\
+    python3.11-venv \\
+    python3-pip \\
+    postgresql-client \\
+    libpq-dev \\
+    gcc \\
+    g++ \\
+    make
+\`\`\`
+
+### macOS
+\`\`\`bash
+brew install python@3.11 postgresql redis
+\`\`\`
+
+### Windows
+1. Instale Python 3.11 de python.org
+2. Instale PostgreSQL
+3. Instale Redis (via WSL ou Docker)
+
+### Docker (Recomendado)
+\`\`\`bash
+# Não requer instalação de dependências
+docker-compose up -d
+\`\`\`
+```
+
+### ❌ **DON'Ts - Práticas a Evitar**
+
+#### ❌ Não comite ambiente virtual
+
+```bash
+# ❌ ERRADO: Commitar venv
+git add .venv/
+git add venv/
+git commit -m "Add virtual environment"
+
+# Por quê evitar:
+# - Tamanho gigante (100MB+)
+# - Específico do OS e Python
+# - Conflitos em merge
+# - Slow clone
+
+# ✅ CORRETO: .gitignore
+.venv/
+venv/
+env/
+*.pyc
+__pycache__/
+```
+
+#### ❌ Não use Python global para projetos
+
+```bash
+# ❌ ERRADO: Instalar no Python global
+sudo pip install fastapi
+pip install uvicorn
+
+# Problemas:
+# - Conflitos entre projetos
+# - Quebra ferramentas do sistema
+# - Difícil de reproduzir
+# - Requer sudo (perigoso)
+
+# ✅ CORRETO: Sempre use venv
+python -m venv .venv
+source .venv/bin/activate
+pip install fastapi uvicorn
+```
+
+#### ❌ Não misture ferramentas inconsistentemente
+
+```bash
+# ❌ ERRADO: Mistura de ferramentas
+conda create -n myenv python=3.11
+conda activate myenv
+pip install poetry
+poetry install  # Confusão total!
+
+# ❌ ERRADO: Múltiplos arquivos de configuração
+# - requirements.txt
+# - Pipfile
+# - pyproject.toml
+# - conda.yml
+# Qual usar???
+
+# ✅ CORRETO: Escolha UMA ferramenta
+# Opção 1: venv + pip
+python -m venv .venv && pip install -r requirements.txt
+
+# Opção 2: Poetry
+poetry install
+
+# Opção 3: Conda (apenas data science)
+conda env create -f environment.yml
+```
+
+#### ❌ Não hardcode caminhos específicos
+
+```python
+# ❌ ERRADO: Caminhos absolutos hardcoded
+DATABASE_FILE = "/home/user/project/data/db.sqlite"
+LOG_FILE = "C:\\Users\\User\\AppData\\app.log"
+
+# ❌ ERRADO: Assume estrutura específica
+CONFIG_PATH = "../../../config/settings.ini"
+
+# ✅ CORRETO: Use Path e caminhos relativos
+from pathlib import Path
+
+# Base do projeto
+BASE_DIR = Path(__file__).parent.parent
+DATA_DIR = BASE_DIR / "data"
+CONFIG_DIR = BASE_DIR / "config"
+
+DATABASE_FILE = DATA_DIR / "db.sqlite"
+LOG_FILE = DATA_DIR / "logs" / "app.log"
+
+# ✅ CORRETO: Use variáveis de ambiente
+import os
+
+DATABASE_FILE = Path(os.getenv("DATABASE_PATH", DATA_DIR / "db.sqlite"))
+```
+
+#### ❌ Não ignore configurações de ambiente
+
+```python
+# ❌ ERRADO: Valores hardcoded
+DATABASE_URL = "postgresql://user:pass@localhost/db"
+SECRET_KEY = "super-secret-key-123"
+DEBUG = True
+
+# ❌ ERRADO: Sem validação
+DATABASE_URL = os.getenv("DATABASE_URL")  # Pode ser None!
+SECRET_KEY = os.getenv("SECRET_KEY")      # Inseguro se vazio
+
+# ✅ CORRETO: Use pydantic-settings com validação
+from pydantic_settings import BaseSettings
+from pydantic import Field
+
+class Settings(BaseSettings):
+    database_url: str = Field(..., min_length=1)
+    secret_key: str = Field(..., min_length=32)
+    debug: bool = Field(default=False)
+    
+    model_config = {
+        "env_file": ".env"
+    }
+
+settings = Settings()  # Falha se configurações inválidas
+```
+
+#### ❌ Não use versões inconsistentes
+
+```bash
+# ❌ ERRADO: Versões diferentes entre ambientes
+# Dev:      Python 3.11, FastAPI 0.100
+# Staging:  Python 3.12, FastAPI 0.110
+# Prod:     Python 3.10, FastAPI 0.95
+# Resultado: bugs específicos de ambiente!
+
+# ❌ ERRADO: Sem especificar versão
+FROM python:latest  # ❌ Qual versão?
+RUN pip install fastapi  # ❌ Qual versão?
+
+# ✅ CORRETO: Versões explícitas e consistentes
+# .python-version
+3.11.7
+
+# requirements.txt
+fastapi==0.115.5
+uvicorn==0.30.6
+
+# Dockerfile
+FROM python:3.11.7-slim
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+# CI/CD
+- uses: actions/setup-python@v5
+  with:
+    python-version-file: '.python-version'
+```
+
+#### ❌ Não deixe dependências desatualizadas
+
+```bash
+# ❌ ERRADO: Nunca atualizar
+# requirements.txt de 2 anos atrás
+fastapi==0.60.0  # Vulnerabilidades conhecidas!
+uvicorn==0.11.0
+
+# ❌ ERRADO: Atualizar sem testar
+pip install --upgrade fastapi uvicorn
+# Quebra tudo em produção!
+
+# ✅ CORRETO: Processo controlado de atualização
+# 1. Verificar dependências desatualizadas
+pip list --outdated
+
+# 2. Atualizar em ambiente de dev/staging
+pip install --upgrade fastapi
+pytest  # Testa tudo
+
+# 3. Atualizar requirements
+pip freeze > requirements.txt
+
+# 4. Deploy gradual
+# dev -> staging -> production
+
+# ✅ CORRETO: Automatizar com Dependabot
+# .github/dependabot.yml
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+```
+
+---
+
+## 10. Troubleshooting
+
+### 🔧 **Problemas Comuns**
+
+```python
+# Problema 1: "No module named 'xxx'"
+# Causa: Ambiente virtual não ativado ou pacote não instalado
+
+# Solução:
+# 1. Verificar se venv está ativo
+which python  # Deve apontar para .venv/bin/python
+
+# 2. Ativar venv
+source .venv/bin/activate
+
+# 3. Reinstalar dependências
+pip install -r requirements.txt
+
+# Problema 2: "Permission denied" ao instalar
+# Causa: Tentando instalar sem venv ou com sudo
+
+# Solução:
+# Nunca use sudo! Use venv
+python -m venv .venv
+source .venv/bin/activate
+pip install <package>
+
+# Problema 3: Versões conflitantes
+# Causa: Múltiplas instalações de Python/pip
+
+# Solução:
+# Use python -m pip em vez de pip
+python -m pip install <package>
+
+# Problema 4: Docker build lento
+# Causa: Sem cache de layers
+
+# Solução:
+# Use BuildKit e cache
+DOCKER_BUILDKIT=1 docker build \
+  --cache-from myapp:latest \
+  --build-arg BUILDKIT_INLINE_CACHE=1 \
+  -t myapp:latest .
+
+# Problema 5: .env não carregado
+# Causa: python-dotenv não instalado ou não configurado
+
+# Solução:
+pip install python-dotenv
+
+# settings.py
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    model_config = {"env_file": ".env"}
+```
+
+---
+
+Esta regra estabelece padrões sólidos para integração com banco de dados em aplicações Python/FastAPI, garantindo código limpo, performático e manutenível.

@@ -1,0 +1,1906 @@
+---
+Rule: fastapi-endpoints.mdc
+Description: Diretrizes para implementações de endpoints REST com FastAPI, cobrindo design de APIs, status codes, versionamento e melhores práticas.
+globs: ["**/endpoints/**/*.py", "**/api/**/*.py", "**/routes/**/*.py"]
+alwaysApply: false
+tags: ["fastapi", "api", "endpoints", "best-practices"]
+Author: Glauber Duma
+Created: 2026-01
+---
+
+# FastAPI - Implementação de Endpoints REST
+
+## 1. Objetivo
+
+Esta rule estabelece padrões e melhores práticas para desenvolvimento de APIs REST com FastAPI, visando:
+
+- **Consistência**: Padronizar a estrutura e organização de endpoints em toda a aplicação
+- **Manutenibilidade**: Facilitar a leitura, compreensão e manutenção do código
+- **Escalabilidade**: Permitir que a API cresça de forma organizada e sustentável
+- **Documentação**: Garantir documentação automática clara e completa via OpenAPI/Swagger
+- **Segurança**: Implementar tratamento adequado de erros e validações robustas
+- **Performance**: Seguir práticas que otimizam o desempenho da aplicação
+- **Testabilidade**: Estruturar código de forma que facilite testes automatizados
+
+## 2. Estrutura dos Endpoints
+
+### 🗂️ Organização dos Arquivos
+
+```
+src/
+├── api/
+│   ├── __init__.py
+│   ├── main.py                      # Aplicação principal FastAPI
+│   ├── deps.py                      # Dependências compartilhadas
+│   │
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── config.py                # Configurações da aplicação
+│   │   ├── security.py              # Funções de segurança
+│   │   ├── exception_handlers.py   # Handlers globais de exceção
+│   │   ├── openapi.py               # Customizações OpenAPI
+│   │   └── versioning.py            # Sistema de versionamento
+│   │
+│   ├── v1/
+│   │   ├── __init__.py
+│   │   ├── router.py                # Router principal v1
+│   │   │
+│   │   ├── endpoints/
+│   │   │   ├── __init__.py
+│   │   │   ├── users.py             # Endpoints de usuários
+│   │   │   ├── auth.py              # Endpoints de autenticação
+│   │   │   └── products.py          # Endpoints de produtos
+│   │   │
+│   │   └── schemas/
+│   │       ├── __init__.py
+│   │       ├── common.py            # Schemas comuns
+│   │       ├── users.py             # Schemas de usuários
+│   │       └── products.py          # Schemas de produtos
+│   │
+│   └── v2/                          # Nova versão da API
+│       └── ...
+│
+├── models/                          # Modelos de domínio/ORM
+│   ├── __init__.py
+│   └── user.py
+│
+├── services/                        # Lógica de negócio
+│   ├── __init__.py
+│   └── user_service.py
+│
+└── repositories/                    # Camada de acesso a dados
+    ├── __init__.py
+    └── user_repository.py
+```
+
+### 🚀 Router Principal
+
+```python
+# src/api/v1/router.py
+"""Router principal da API v1."""
+
+from fastapi import APIRouter
+
+from src.api.v1.endpoints import auth, users, products
+
+# Criar router principal da v1
+api_router = APIRouter(prefix="/v1")
+
+# Incluir routers de cada recurso
+api_router.include_router(
+    auth.router,
+    prefix="/auth",
+    tags=["authentication"]
+)
+
+api_router.include_router(
+    users.router,
+    prefix="/users",
+    tags=["users"]
+)
+
+api_router.include_router(
+    products.router,
+    prefix="/products",
+    tags=["products"]
+)
+```
+
+## 3. Padrões de Endpoints CRUD
+
+### 👤 **Exemplo completo: User endpoints**
+
+```python
+# src/api/v1/endpoints/users.py
+"""Endpoints de gerenciamento de usuários."""
+
+from typing import List, Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+
+from src.api import deps
+from src.api.v1.schemas.users import (
+    UserCreate,
+    UserUpdate,
+    UserResponse,
+    UserListResponse,
+    UserDetailResponse
+)
+from src.api.v1.schemas.common import ErrorResponse, MessageResponse
+from src.services.user_service import UserService
+from src.core.security import get_current_active_user
+from src.models.user import User
+
+router = APIRouter()
+
+
+@router.get(
+    "/",
+    response_model=UserListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Listar todos os usuários",
+    description="Retorna lista paginada de usuários com filtros opcionais",
+    responses={
+        200: {"description": "Lista de usuários retornada com sucesso"},
+        401: {"model": ErrorResponse, "description": "Não autenticado"},
+        403: {"model": ErrorResponse, "description": "Sem permissão"},
+    }
+)
+async def list_users(
+    skip: int = Query(0, ge=0, description="Número de registros a pular"),
+    limit: int = Query(100, ge=1, le=1000, description="Número máximo de registros"),
+    search: Optional[str] = Query(None, min_length=2, description="Busca por nome ou email"),
+    is_active: Optional[bool] = Query(None, description="Filtrar por status ativo"),
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(get_current_active_user)
+) -> UserListResponse:
+    """
+    Lista usuários com paginação e filtros.
+    
+    - **skip**: Offset para paginação
+    - **limit**: Limite de registros retornados
+    - **search**: Busca textual em nome e email
+    - **is_active**: Filtrar apenas usuários ativos/inativos
+    """
+    service = UserService(db)
+    
+    users, total = await service.get_users(
+        skip=skip,
+        limit=limit,
+        search=search,
+        is_active=is_active
+    )
+    
+    return UserListResponse(
+        data=users,
+        total=total,
+        skip=skip,
+        limit=limit
+    )
+
+
+@router.get(
+    "/{user_id}",
+    response_model=UserDetailResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Obter usuário por ID",
+    description="Retorna detalhes completos de um usuário específico",
+    responses={
+        200: {"description": "Usuário encontrado"},
+        404: {"model": ErrorResponse, "description": "Usuário não encontrado"},
+        401: {"model": ErrorResponse, "description": "Não autenticado"},
+    }
+)
+async def get_user(
+    user_id: UUID,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(get_current_active_user)
+) -> UserDetailResponse:
+    """
+    Retorna detalhes completos de um usuário pelo ID.
+    
+    - **user_id**: ID único do usuário (UUID)
+    """
+    service = UserService(db)
+    
+    user = await service.get_user_by_id(user_id)
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Usuário com ID {user_id} não encontrado"
+        )
+    
+    return UserDetailResponse(data=user)
+
+
+@router.post(
+    "/",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Criar novo usuário",
+    description="Cria um novo usuário no sistema",
+    responses={
+        201: {"description": "Usuário criado com sucesso"},
+        400: {"model": ErrorResponse, "description": "Dados inválidos"},
+        409: {"model": ErrorResponse, "description": "Email já cadastrado"},
+        401: {"model": ErrorResponse, "description": "Não autenticado"},
+    }
+)
+async def create_user(
+    user_data: UserCreate,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(get_current_active_user)
+) -> UserResponse:
+    """
+    Cria um novo usuário.
+    
+    - **email**: Email único do usuário (validado)
+    - **name**: Nome completo do usuário
+    - **password**: Senha (mínimo 8 caracteres)
+    """
+    service = UserService(db)
+    
+    # Verificar se email já existe
+    existing_user = await service.get_user_by_email(user_data.email)
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email já cadastrado no sistema"
+        )
+    
+    user = await service.create_user(user_data)
+    
+    return UserResponse(
+        data=user,
+        message="Usuário criado com sucesso"
+    )
+
+
+@router.put(
+    "/{user_id}",
+    response_model=UserResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Atualizar usuário completo",
+    description="Atualiza todos os campos de um usuário (substituição completa)",
+    responses={
+        200: {"description": "Usuário atualizado com sucesso"},
+        404: {"model": ErrorResponse, "description": "Usuário não encontrado"},
+        400: {"model": ErrorResponse, "description": "Dados inválidos"},
+        401: {"model": ErrorResponse, "description": "Não autenticado"},
+    }
+)
+async def update_user(
+    user_id: UUID,
+    user_data: UserUpdate,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(get_current_active_user)
+) -> UserResponse:
+    """
+    Atualiza completamente um usuário (PUT - substituição total).
+    
+    - **user_id**: ID do usuário a ser atualizado
+    - Todos os campos do UserUpdate devem ser fornecidos
+    """
+    service = UserService(db)
+    
+    user = await service.update_user(user_id, user_data)
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Usuário com ID {user_id} não encontrado"
+        )
+    
+    return UserResponse(
+        data=user,
+        message="Usuário atualizado com sucesso"
+    )
+
+
+@router.patch(
+    "/{user_id}",
+    response_model=UserResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Atualizar usuário parcialmente",
+    description="Atualiza campos específicos de um usuário",
+    responses={
+        200: {"description": "Usuário atualizado com sucesso"},
+        404: {"model": ErrorResponse, "description": "Usuário não encontrado"},
+        400: {"model": ErrorResponse, "description": "Dados inválidos"},
+        401: {"model": ErrorResponse, "description": "Não autenticado"},
+    }
+)
+async def partial_update_user(
+    user_id: UUID,
+    user_data: UserUpdate,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(get_current_active_user)
+) -> UserResponse:
+    """
+    Atualiza parcialmente um usuário (PATCH - atualização parcial).
+    
+    - **user_id**: ID do usuário a ser atualizado
+    - Apenas campos fornecidos serão atualizados
+    """
+    service = UserService(db)
+    
+    # exclude_unset=True permite atualização parcial
+    user = await service.patch_user(
+        user_id, 
+        user_data.model_dump(exclude_unset=True)
+    )
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Usuário com ID {user_id} não encontrado"
+        )
+    
+    return UserResponse(
+        data=user,
+        message="Usuário atualizado com sucesso"
+    )
+
+
+@router.delete(
+    "/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Deletar usuário",
+    description="Remove permanentemente um usuário do sistema",
+    responses={
+        204: {"description": "Usuário deletado com sucesso"},
+        404: {"model": ErrorResponse, "description": "Usuário não encontrado"},
+        401: {"model": ErrorResponse, "description": "Não autenticado"},
+        409: {"model": ErrorResponse, "description": "Usuário possui dependências"},
+    }
+)
+async def delete_user(
+    user_id: UUID,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(get_current_active_user)
+) -> None:
+    """
+    Deleta permanentemente um usuário.
+    
+    - **user_id**: ID do usuário a ser deletado
+    
+    **ATENÇÃO**: Esta operação é irreversível!
+    """
+    service = UserService(db)
+    
+    success = await service.delete_user(user_id)
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Usuário com ID {user_id} não encontrado"
+        )
+    
+    # 204 não retorna body
+    return None
+
+
+@router.post(
+    "/{user_id}/activate",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Ativar usuário",
+    description="Ativa um usuário previamente desativado",
+    responses={
+        200: {"description": "Usuário ativado com sucesso"},
+        404: {"model": ErrorResponse, "description": "Usuário não encontrado"},
+        401: {"model": ErrorResponse, "description": "Não autenticado"},
+    }
+)
+async def activate_user(
+    user_id: UUID,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(get_current_active_user)
+) -> MessageResponse:
+    """
+    Ativa um usuário desativado.
+    
+    - **user_id**: ID do usuário a ser ativado
+    """
+    service = UserService(db)
+    
+    success = await service.activate_user(user_id)
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Usuário com ID {user_id} não encontrado"
+        )
+    
+    return MessageResponse(message="Usuário ativado com sucesso")
+```
+
+## 4. Schemas Pydantic
+
+### 📄 **Schemas de usuários**
+
+```python
+# src/api/v1/schemas/users.py
+"""Schemas Pydantic para usuários."""
+
+from datetime import datetime
+from typing import Optional, List
+from uuid import UUID
+
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
+
+
+# Schema base com campos comuns
+class UserBase(BaseModel):
+    """Schema base para usuário."""
+    
+    email: EmailStr = Field(
+        ...,
+        description="Email único do usuário",
+        examples=["usuario@example.com"]
+    )
+    name: str = Field(
+        ...,
+        min_length=2,
+        max_length=100,
+        description="Nome completo do usuário",
+        examples=["João Silva"]
+    )
+    is_active: bool = Field(
+        default=True,
+        description="Indica se o usuário está ativo"
+    )
+
+
+# Schema para criação (entrada)
+class UserCreate(UserBase):
+    """Schema para criação de usuário."""
+    
+    password: str = Field(
+        ...,
+        min_length=8,
+        max_length=100,
+        description="Senha do usuário (mínimo 8 caracteres)",
+        examples=["SenhaForte123!"]
+    )
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "email": "novo.usuario@example.com",
+                "name": "Novo Usuário",
+                "password": "SenhaSegura123!",
+                "is_active": True
+            }
+        }
+    )
+
+
+# Schema para atualização (entrada)
+class UserUpdate(BaseModel):
+    """Schema para atualização de usuário."""
+    
+    email: Optional[EmailStr] = Field(
+        None,
+        description="Novo email do usuário"
+    )
+    name: Optional[str] = Field(
+        None,
+        min_length=2,
+        max_length=100,
+        description="Novo nome do usuário"
+    )
+    is_active: Optional[bool] = Field(
+        None,
+        description="Novo status ativo/inativo"
+    )
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "name": "Nome Atualizado",
+                "is_active": False
+            }
+        }
+    )
+
+
+# Schema de leitura (saída) - sem campos sensíveis
+class UserRead(UserBase):
+    """Schema de leitura básico de usuário."""
+    
+    id: UUID = Field(..., description="ID único do usuário")
+    created_at: datetime = Field(..., description="Data de criação")
+    updated_at: datetime = Field(..., description="Data da última atualização")
+    
+    model_config = ConfigDict(
+        from_attributes=True,  # Permite conversão de ORM para Pydantic
+        json_schema_extra={
+            "example": {
+                "id": "123e4567-e89b-12d3-a456-426614174000",
+                "email": "usuario@example.com",
+                "name": "João Silva",
+                "is_active": True,
+                "created_at": "2026-01-22T10:30:00",
+                "updated_at": "2026-01-22T10:30:00"
+            }
+        }
+    )
+
+
+# Schema detalhado (saída) - com relações e campos adicionais
+class UserDetail(UserRead):
+    """Schema detalhado de usuário com informações completas."""
+    
+    last_login: Optional[datetime] = Field(
+        None,
+        description="Data do último login"
+    )
+    login_count: int = Field(
+        default=0,
+        description="Número total de logins"
+    )
+    # Adicionar outras relações conforme necessário
+
+
+# Schemas de resposta wrapeados
+class UserResponse(BaseModel):
+    """Response wrapper para um único usuário."""
+    
+    data: UserRead
+    message: str = Field(default="Operação realizada com sucesso")
+
+
+class UserDetailResponse(BaseModel):
+    """Response wrapper para detalhes de usuário."""
+    
+    data: UserDetail
+
+
+class UserListResponse(BaseModel):
+    """Response wrapper para lista de usuários com paginação."""
+    
+    data: List[UserRead]
+    total: int = Field(..., description="Total de registros disponíveis")
+    skip: int = Field(..., description="Offset aplicado")
+    limit: int = Field(..., description="Limite aplicado")
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "data": [
+                    {
+                        "id": "123e4567-e89b-12d3-a456-426614174000",
+                        "email": "usuario1@example.com",
+                        "name": "Usuário 1",
+                        "is_active": True,
+                        "created_at": "2026-01-22T10:30:00",
+                        "updated_at": "2026-01-22T10:30:00"
+                    }
+                ],
+                "total": 150,
+                "skip": 0,
+                "limit": 100
+            }
+        }
+    )
+```
+
+### 📄 **Schemas comuns**
+
+```python
+# src/api/v1/schemas/common.py
+"""Schemas comuns reutilizáveis."""
+
+from typing import Optional, Generic, TypeVar, List, Any
+from datetime import datetime
+
+from pydantic import BaseModel, Field, ConfigDict
+
+
+# Schema genérico para mensagens
+class MessageResponse(BaseModel):
+    """Response padrão com mensagem."""
+    
+    message: str = Field(
+        ...,
+        description="Mensagem descritiva da operação",
+        examples=["Operação realizada com sucesso"]
+    )
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "message": "Operação realizada com sucesso"
+            }
+        }
+    )
+
+
+# Schema para erros
+class ErrorResponse(BaseModel):
+    """Response padrão para erros."""
+    
+    detail: str = Field(
+        ...,
+        description="Descrição detalhada do erro",
+        examples=["Recurso não encontrado"]
+    )
+    error_code: Optional[str] = Field(
+        None,
+        description="Código interno do erro",
+        examples=["USER_NOT_FOUND"]
+    )
+    timestamp: datetime = Field(
+        default_factory=datetime.utcnow,
+        description="Timestamp do erro"
+    )
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "detail": "Recurso não encontrado",
+                "error_code": "RESOURCE_NOT_FOUND",
+                "timestamp": "2026-01-22T10:30:00"
+            }
+        }
+    )
+
+
+# Schema para erros de validação
+class ValidationErrorResponse(BaseModel):
+    """Response para erros de validação."""
+    
+    detail: List[dict[str, Any]] = Field(
+        ...,
+        description="Lista de erros de validação"
+    )
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "detail": [
+                    {
+                        "loc": ["body", "email"],
+                        "msg": "value is not a valid email address",
+                        "type": "value_error.email"
+                    }
+                ]
+            }
+        }
+    )
+
+
+# Schema genérico para listas paginadas
+DataT = TypeVar('DataT')
+
+class PaginatedResponse(BaseModel, Generic[DataT]):
+    """Response genérico para listas paginadas."""
+    
+    data: List[DataT]
+    total: int = Field(..., ge=0, description="Total de registros")
+    skip: int = Field(..., ge=0, description="Offset de paginação")
+    limit: int = Field(..., ge=1, description="Limite de registros")
+    has_next: bool = Field(..., description="Indica se há próxima página")
+    has_previous: bool = Field(..., description="Indica se há página anterior")
+    
+    @property
+    def page(self) -> int:
+        """Calcula número da página atual."""
+        return (self.skip // self.limit) + 1 if self.limit else 1
+    
+    @property
+    def total_pages(self) -> int:
+        """Calcula total de páginas."""
+        return (self.total + self.limit - 1) // self.limit if self.limit else 1
+
+
+# Schema para health check
+class HealthCheckResponse(BaseModel):
+    """Response de health check."""
+    
+    status: str = Field(..., examples=["healthy"])
+    version: str = Field(..., examples=["1.0.0"])
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "status": "healthy",
+                "version": "1.0.0",
+                "timestamp": "2026-01-22T10:30:00"
+            }
+        }
+    )
+
+
+# Schema para operações em lote
+class BulkOperationResponse(BaseModel):
+    """Response para operações em lote."""
+    
+    total: int = Field(..., description="Total de operações solicitadas")
+    successful: int = Field(..., description="Operações bem-sucedidas")
+    failed: int = Field(..., description="Operações falhadas")
+    errors: Optional[List[dict]] = Field(
+        None,
+        description="Lista de erros para operações falhadas"
+    )
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "total": 100,
+                "successful": 95,
+                "failed": 5,
+                "errors": [
+                    {"id": "123", "error": "Email já existe"}
+                ]
+            }
+        }
+    )
+```
+
+## 5. Versionamento de API
+
+### ♻️ **Estratégias de Versionamento**
+
+```python
+# src/api/main.py
+"""Configuração principal da aplicação com versionamento."""
+
+from fastapi import FastAPI, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from src.api.v1.router import api_router as v1_router
+from src.api.v2.router import api_router as v2_router
+from src.api.core.exception_handlers import (
+    register_exception_handlers,
+    validation_exception_handler
+)
+from src.api.core.config import settings
+
+# Criar aplicação FastAPI
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    description="API REST com FastAPI seguindo melhores práticas",
+    version="1.0.0",
+    openapi_url="/api/openapi.json",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_tags=[
+        {
+            "name": "authentication",
+            "description": "Operações de autenticação e autorização"
+        },
+        {
+            "name": "users",
+            "description": "Operações de gerenciamento de usuários"
+        },
+        {
+            "name": "products",
+            "description": "Operações de gerenciamento de produtos"
+        }
+    ]
+)
+
+# Configurar CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Registrar handlers de exceção
+register_exception_handlers(app)
+
+# Incluir routers versionados
+app.include_router(v1_router, prefix="/api")
+app.include_router(v2_router, prefix="/api")
+
+
+# Health check endpoint
+@app.get(
+    "/health",
+    status_code=status.HTTP_200_OK,
+    tags=["health"],
+    summary="Health check",
+    description="Verifica saúde da aplicação"
+)
+async def health_check():
+    """Endpoint de health check."""
+    return {
+        "status": "healthy",
+        "version": app.version
+    }
+
+
+# Root endpoint
+@app.get(
+    "/",
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False
+)
+async def root():
+    """Endpoint raiz - redireciona para documentação."""
+    return {
+        "message": "API FastAPI - Acesse /api/docs para documentação",
+        "docs": "/api/docs",
+        "redoc": "/api/redoc",
+        "openapi": "/api/openapi.json"
+    }
+
+
+# Startup event
+@app.on_event("startup")
+async def startup_event():
+    """Executado ao iniciar a aplicação."""
+    print(f"🚀 Iniciando {settings.PROJECT_NAME}")
+    print(f"📝 Documentação disponível em: /api/docs")
+
+
+# Shutdown event
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Executado ao encerrar a aplicação."""
+    print("👋 Encerrando aplicação")
+```
+
+### ♻️ **Versionamento por Header**
+
+```python
+# src/api/core/versioning.py
+"""Sistema de versionamento por header."""
+
+from typing import Callable
+from fastapi import Request, HTTPException, status
+from functools import wraps
+
+
+def get_api_version(request: Request) -> str:
+    """
+    Extrai versão da API do header.
+    
+    Suporta:
+    - Header: API-Version: 1
+    - Header: Accept: application/vnd.api+json; version=1
+    - Default: v1
+    """
+    # Tentar header API-Version
+    version = request.headers.get("API-Version")
+    
+    if not version:
+        # Tentar extrair do Accept header
+        accept = request.headers.get("Accept", "")
+        if "version=" in accept:
+            try:
+                version = accept.split("version=")[1].split(";")[0].strip()
+            except IndexError:
+                version = None
+    
+    # Default para v1
+    return f"v{version}" if version else "v1"
+
+
+def require_api_version(min_version: int):
+    """
+    Decorator para exigir versão mínima da API.
+    
+    Uso:
+        @require_api_version(2)
+        async def my_endpoint():
+            ...
+    """
+    def decorator(func: Callable):
+        @wraps(func)
+        async def wrapper(*args, request: Request, **kwargs):
+            version_str = get_api_version(request)
+            
+            try:
+                current_version = int(version_str.replace("v", ""))
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Versão da API inválida"
+                )
+            
+            if current_version < min_version:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Esta operação requer API versão {min_version} ou superior"
+                )
+            
+            return await func(*args, request=request, **kwargs)
+        
+        return wrapper
+    return decorator
+
+
+def deprecated_endpoint(
+    deprecated_in: str,
+    removed_in: str,
+    alternative: str = None
+):
+    """
+    Decorator para marcar endpoint como deprecated.
+    
+    Args:
+        deprecated_in: Versão em que foi marcado como deprecated
+        removed_in: Versão em que será removido
+        alternative: Endpoint alternativo sugerido
+    
+    Uso:
+        @deprecated_endpoint(
+            deprecated_in="v1",
+            removed_in="v3",
+            alternative="/api/v2/users"
+        )
+    """
+    def decorator(func: Callable):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            # Adicionar header de warning
+            response = await func(*args, **kwargs)
+            
+            warning_msg = (
+                f'299 - "Deprecated in {deprecated_in}, '
+                f'will be removed in {removed_in}'
+            )
+            
+            if alternative:
+                warning_msg += f'. Use {alternative} instead'
+            
+            warning_msg += '"'
+            
+            if hasattr(response, 'headers'):
+                response.headers['Warning'] = warning_msg
+                response.headers['Sunset'] = removed_in
+            
+            return response
+        
+        return wrapper
+    return decorator
+
+
+# Middleware de versionamento
+async def version_middleware(request: Request, call_next):
+    """
+    Middleware que adiciona informação de versão aos headers de resposta.
+    """
+    version = get_api_version(request)
+    
+    response = await call_next(request)
+    response.headers["API-Version"] = version
+    
+    return response
+```
+
+## 6. Documentação OpenAPI
+
+### 📚 **Configuração Avançada**
+
+```python
+# src/api/core/openapi.py
+"""Configuração avançada OpenAPI."""
+
+from typing import Dict, Any
+from fastapi import FastAPI
+from fastapi.openapi.utils import get_openapi
+
+
+def custom_openapi_schema(app: FastAPI) -> Dict[str, Any]:
+    """
+    Gera schema OpenAPI customizado com informações adicionais.
+    """
+    if app.openapi_schema:
+        return app.openapi_schema
+    
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    
+    # Adicionar informações de contato
+    openapi_schema["info"]["contact"] = {
+        "name": "Equipe de API",
+        "email": "api@empresa.com",
+        "url": "https://empresa.com/api"
+    }
+    
+    # Adicionar informações de licença
+    openapi_schema["info"]["license"] = {
+        "name": "MIT",
+        "url": "https://opensource.org/licenses/MIT"
+    }
+    
+    # Adicionar servidor(es)
+    openapi_schema["servers"] = [
+        {
+            "url": "https://api.empresa.com",
+            "description": "Servidor de Produção"
+        },
+        {
+            "url": "https://staging-api.empresa.com",
+            "description": "Servidor de Staging"
+        },
+        {
+            "url": "http://localhost:8000",
+            "description": "Servidor Local de Desenvolvimento"
+        }
+    ]
+    
+    # Adicionar esquemas de segurança
+    openapi_schema["components"]["securitySchemes"] = {
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "Token JWT obtido via endpoint de autenticação"
+        },
+        "ApiKeyAuth": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-API-Key",
+            "description": "API Key para autenticação de serviços"
+        }
+    }
+    
+    # Adicionar exemplos customizados
+    openapi_schema["components"]["examples"] = {
+        "UserExample": {
+            "summary": "Exemplo de usuário",
+            "value": {
+                "id": "123e4567-e89b-12d3-a456-426614174000",
+                "email": "usuario@example.com",
+                "name": "João Silva",
+                "is_active": True
+            }
+        }
+    }
+    
+    # Adicionar links externos
+    openapi_schema["externalDocs"] = {
+        "description": "Documentação completa da API",
+        "url": "https://docs.empresa.com/api"
+    }
+    
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+def setup_openapi(app: FastAPI):
+    """
+    Configura OpenAPI customizado na aplicação.
+    
+    Uso:
+        app = FastAPI()
+        setup_openapi(app)
+    """
+    app.openapi = lambda: custom_openapi_schema(app)
+
+
+# Exemplos de como documentar endpoints de forma rica
+def get_endpoint_documentation() -> Dict[str, Any]:
+    """
+    Retorna exemplo de documentação rica para endpoints.
+    
+    Uso em endpoints:
+        @router.get("/users/{user_id}", **get_endpoint_documentation())
+    """
+    return {
+        "summary": "Obter usuário por ID",
+        "description": """
+        Retorna informações detalhadas de um usuário específico.
+        
+        ## Permissões Necessárias
+        - Usuário autenticado
+        - Role: `user:read` ou superior
+        
+        ## Comportamento
+        - Retorna dados completos do usuário se encontrado
+        - Retorna 404 se usuário não existir
+        - Retorna 403 se usuário não tiver permissão
+        
+        ## Exemplos de Uso
+        
+        ### cURL
+        ```bash
+        curl -X GET "https://api.empresa.com/api/v1/users/123e4567-e89b-12d3-a456-426614174000" \\
+             -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+        
+        ### Python
+        ```python
+        import requests
+        
+        response = requests.get(
+            "https://api.empresa.com/api/v1/users/123e4567-e89b-12d3-a456-426614174000",
+            headers={"Authorization": "Bearer YOUR_TOKEN"}
+        )
+        user = response.json()
+        ```
+        """,
+        "responses": {
+            200: {
+                "description": "Usuário encontrado com sucesso",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "data": {
+                                "id": "123e4567-e89b-12d3-a456-426614174000",
+                                "email": "usuario@example.com",
+                                "name": "João Silva",
+                                "is_active": True,
+                                "created_at": "2026-01-22T10:30:00",
+                                "updated_at": "2026-01-22T10:30:00"
+                            }
+                        }
+                    }
+                }
+            },
+            404: {
+                "description": "Usuário não encontrado",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "detail": "Usuário com ID 123e4567-e89b-12d3-a456-426614174000 não encontrado",
+                            "error_code": "USER_NOT_FOUND"
+                        }
+                    }
+                }
+            }
+        }
+    }
+```
+
+## 7. Tratamento de Erros
+
+### ❗ **Handlers de Exceções Globais**
+
+```python
+# src/api/core/exception_handlers.py
+"""Handlers globais de exceção."""
+
+from typing import Union
+from datetime import datetime
+
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+# Exceções customizadas
+class BusinessException(Exception):
+    """Exceção para erros de regra de negócio."""
+    
+    def __init__(
+        self,
+        message: str,
+        error_code: str = None,
+        status_code: int = status.HTTP_400_BAD_REQUEST
+    ):
+        self.message = message
+        self.error_code = error_code
+        self.status_code = status_code
+        super().__init__(self.message)
+
+
+class ResourceNotFoundException(Exception):
+    """Exceção para recursos não encontrados."""
+    
+    def __init__(self, resource: str, identifier: Union[str, int]):
+        self.message = f"{resource} com ID {identifier} não encontrado"
+        self.resource = resource
+        self.identifier = identifier
+        super().__init__(self.message)
+
+
+class DuplicateResourceException(Exception):
+    """Exceção para recursos duplicados."""
+    
+    def __init__(self, resource: str, field: str, value: str):
+        self.message = f"{resource} com {field}='{value}' já existe"
+        self.resource = resource
+        self.field = field
+        self.value = value
+        super().__init__(self.message)
+
+
+# Handlers de exceção
+async def http_exception_handler(
+    request: Request,
+    exc: HTTPException
+) -> JSONResponse:
+    """Handler para HTTPException padrão do FastAPI."""
+    
+    logger.warning(
+        f"HTTPException: {exc.status_code} - {exc.detail} - "
+        f"Path: {request.url.path}"
+    )
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": exc.detail,
+            "error_code": f"HTTP_{exc.status_code}",
+            "timestamp": datetime.utcnow().isoformat(),
+            "path": str(request.url.path)
+        }
+    )
+
+
+async def validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError
+) -> JSONResponse:
+    """Handler para erros de validação Pydantic."""
+    
+    logger.warning(
+        f"ValidationError: {exc.errors()} - Path: {request.url.path}"
+    )
+    
+    # Formatar erros de forma mais amigável
+    errors = []
+    for error in exc.errors():
+        field = " -> ".join(str(loc) for loc in error["loc"])
+        errors.append({
+            "field": field,
+            "message": error["msg"],
+            "type": error["type"]
+        })
+    
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "detail": "Erro de validação nos dados fornecidos",
+            "error_code": "VALIDATION_ERROR",
+            "errors": errors,
+            "timestamp": datetime.utcnow().isoformat(),
+            "path": str(request.url.path)
+        }
+    )
+
+
+async def business_exception_handler(
+    request: Request,
+    exc: BusinessException
+) -> JSONResponse:
+    """Handler para exceções de negócio customizadas."""
+    
+    logger.warning(
+        f"BusinessException: {exc.message} - Path: {request.url.path}"
+    )
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": exc.message,
+            "error_code": exc.error_code or "BUSINESS_ERROR",
+            "timestamp": datetime.utcnow().isoformat(),
+            "path": str(request.url.path)
+        }
+    )
+
+
+async def resource_not_found_handler(
+    request: Request,
+    exc: ResourceNotFoundException
+) -> JSONResponse:
+    """Handler para recursos não encontrados."""
+    
+    logger.info(
+        f"ResourceNotFound: {exc.message} - Path: {request.url.path}"
+    )
+    
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content={
+            "detail": exc.message,
+            "error_code": "RESOURCE_NOT_FOUND",
+            "resource": exc.resource,
+            "identifier": str(exc.identifier),
+            "timestamp": datetime.utcnow().isoformat(),
+            "path": str(request.url.path)
+        }
+    )
+
+
+async def duplicate_resource_handler(
+    request: Request,
+    exc: DuplicateResourceException
+) -> JSONResponse:
+    """Handler para recursos duplicados."""
+    
+    logger.warning(
+        f"DuplicateResource: {exc.message} - Path: {request.url.path}"
+    )
+    
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={
+            "detail": exc.message,
+            "error_code": "DUPLICATE_RESOURCE",
+            "resource": exc.resource,
+            "field": exc.field,
+            "value": exc.value,
+            "timestamp": datetime.utcnow().isoformat(),
+            "path": str(request.url.path)
+        }
+    )
+
+
+async def integrity_error_handler(
+    request: Request,
+    exc: IntegrityError
+) -> JSONResponse:
+    """Handler para erros de integridade do banco de dados."""
+    
+    logger.error(
+        f"IntegrityError: {str(exc)} - Path: {request.url.path}"
+    )
+    
+    # Tentar extrair mensagem mais amigável
+    error_msg = str(exc.orig) if hasattr(exc, 'orig') else str(exc)
+    
+    if "unique constraint" in error_msg.lower():
+        detail = "Registro duplicado. Este valor já existe no sistema."
+        error_code = "DUPLICATE_ENTRY"
+    elif "foreign key constraint" in error_msg.lower():
+        detail = "Operação inválida. Existem dependências relacionadas."
+        error_code = "FOREIGN_KEY_VIOLATION"
+    else:
+        detail = "Erro de integridade de dados."
+        error_code = "INTEGRITY_ERROR"
+    
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={
+            "detail": detail,
+            "error_code": error_code,
+            "timestamp": datetime.utcnow().isoformat(),
+            "path": str(request.url.path)
+        }
+    )
+
+
+async def sqlalchemy_exception_handler(
+    request: Request,
+    exc: SQLAlchemyError
+) -> JSONResponse:
+    """Handler genérico para erros do SQLAlchemy."""
+    
+    logger.error(
+        f"SQLAlchemyError: {str(exc)} - Path: {request.url.path}",
+        exc_info=True
+    )
+    
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "detail": "Erro ao processar operação no banco de dados",
+            "error_code": "DATABASE_ERROR",
+            "timestamp": datetime.utcnow().isoformat(),
+            "path": str(request.url.path)
+        }
+    )
+
+
+async def generic_exception_handler(
+    request: Request,
+    exc: Exception
+) -> JSONResponse:
+    """Handler genérico para exceções não tratadas."""
+    
+    logger.error(
+        f"UnhandledException: {str(exc)} - Path: {request.url.path}",
+        exc_info=True
+    )
+    
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "detail": "Erro interno do servidor",
+            "error_code": "INTERNAL_SERVER_ERROR",
+            "timestamp": datetime.utcnow().isoformat(),
+            "path": str(request.url.path)
+        }
+    )
+
+
+def register_exception_handlers(app: FastAPI):
+    """
+    Registra todos os handlers de exceção na aplicação.
+    
+    Uso:
+        app = FastAPI()
+        register_exception_handlers(app)
+    """
+    app.add_exception_handler(HTTPException, http_exception_handler)
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.add_exception_handler(BusinessException, business_exception_handler)
+    app.add_exception_handler(ResourceNotFoundException, resource_not_found_handler)
+    app.add_exception_handler(DuplicateResourceException, duplicate_resource_handler)
+    app.add_exception_handler(IntegrityError, integrity_error_handler)
+    app.add_exception_handler(SQLAlchemyError, sqlalchemy_exception_handler)
+    app.add_exception_handler(Exception, generic_exception_handler)
+```
+
+## 8. Boas Práticas
+
+### ✅ **Checklist de Boas Práticas Recomendadas**
+
+```python
+# ✅ Use status codes HTTP apropriados e específicos
+@router.post("/users", status_code=status.HTTP_201_CREATED)
+@router.get("/users", status_code=status.HTTP_200_OK)
+@router.delete("/users/{id}", status_code=status.HTTP_204_NO_CONTENT)
+
+# ✅ Use typing hints completos para melhor documentação
+async def get_user(user_id: UUID) -> UserResponse:
+    pass
+
+# ✅ Use Pydantic para validação automática de dados
+class UserCreate(BaseModel):
+    email: EmailStr  # Valida formato de email automaticamente
+    age: int = Field(..., ge=18, le=120)  # Valida range de valores
+
+# ✅ Use Field() do Pydantic para documentação rica
+name: str = Field(
+    ...,
+    min_length=2,
+    max_length=100,
+    description="Nome completo do usuário",
+    examples=["João Silva"]
+)
+
+# ✅ Documente responses possíveis no decorator
+@router.get(
+    "/users/{id}",
+    responses={
+        200: {"description": "Usuário encontrado"},
+        404: {"model": ErrorResponse, "description": "Usuário não encontrado"},
+        401: {"model": ErrorResponse, "description": "Não autenticado"}
+    }
+)
+
+# ✅ Use Path, Query e Body para documentar parâmetros
+async def list_users(
+    skip: int = Query(0, ge=0, description="Offset para paginação"),
+    limit: int = Query(100, ge=1, le=1000, description="Limite de registros"),
+    search: Optional[str] = Query(None, min_length=2, description="Termo de busca")
+):
+    pass
+
+# ✅ Separe lógica de negócio dos endpoints (use Services)
+@router.post("/users")
+async def create_user(data: UserCreate, db: Session = Depends(get_db)):
+    service = UserService(db)  # Lógica no Service
+    return await service.create_user(data)
+
+# ✅ Use dependency injection para recursos compartilhados
+async def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+@router.get("/users")
+async def list_users(db: Session = Depends(get_db)):
+    pass
+
+# ✅ Use response_model para validação de saída
+@router.get("/users/{id}", response_model=UserResponse)
+async def get_user(user_id: UUID):
+    # FastAPI valida que o retorno corresponde ao UserResponse
+    return user_data
+
+# ✅ Use HTTPException para erros controlados
+if not user:
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Usuário com ID {user_id} não encontrado"
+    )
+
+# ✅ Agrupe endpoints relacionados em routers
+# users.py
+router = APIRouter(prefix="/users", tags=["users"])
+
+# ✅ Use prefixos e tags para organização
+api_router.include_router(
+    users.router,
+    prefix="/users",
+    tags=["users"]
+)
+
+# ✅ Valide UUIDs e tipos complexos automaticamente
+@router.get("/users/{user_id}")
+async def get_user(user_id: UUID):  # FastAPI valida UUID automaticamente
+    pass
+
+# ✅ Use Depends() para autenticação e autorização
+@router.get("/users/me")
+async def get_current_user(
+    current_user: User = Depends(get_current_active_user)
+):
+    return current_user
+
+# ✅ Configure CORS adequadamente
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://example.com"],  # Especifique origens permitidas
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["*"],
+)
+
+# ✅ Use background tasks para operações assíncronas
+from fastapi import BackgroundTasks
+
+@router.post("/send-email")
+async def send_email(
+    email: EmailSchema,
+    background_tasks: BackgroundTasks
+):
+    background_tasks.add_task(send_email_task, email)
+    return {"message": "Email será enviado em background"}
+
+# ✅ Implemente paginação consistente
+@router.get("/users", response_model=PaginatedResponse[UserRead])
+async def list_users(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000)
+):
+    users = await get_users(skip=skip, limit=limit)
+    total = await count_users()
+    return {
+        "data": users,
+        "total": total,
+        "skip": skip,
+        "limit": limit
+    }
+
+# ✅ Use enums para valores fixos
+from enum import Enum
+
+class UserRole(str, Enum):
+    ADMIN = "admin"
+    USER = "user"
+    GUEST = "guest"
+
+class UserCreate(BaseModel):
+    role: UserRole  # Apenas valores definidos no enum são aceitos
+
+# ✅ Configure timeout adequados
+from fastapi import Request
+import asyncio
+
+@router.get("/long-operation")
+async def long_operation(request: Request):
+    try:
+        async with asyncio.timeout(30):  # Timeout de 30 segundos
+            result = await perform_long_operation()
+            return result
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Operação excedeu tempo limite"
+        )
+
+# ✅ Use lifespan events para startup/shutdown
+@app.on_event("startup")
+async def startup():
+    # Inicializar conexões, cache, etc
+    await database.connect()
+
+@app.on_event("shutdown")
+async def shutdown():
+    # Limpar recursos
+    await database.disconnect()
+
+# ✅ Implemente rate limiting
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+@router.get("/users")
+@limiter.limit("10/minute")
+async def list_users(request: Request):
+    pass
+
+# ✅ Use response models diferentes para input/output
+@router.post("/users", response_model=UserResponse)
+async def create_user(user: UserCreate):  # Input: UserCreate (com senha)
+    # Output: UserResponse (sem senha)
+    return created_user
+
+# ✅ Documente claramente operações destrutivas
+@router.delete(
+    "/users/{user_id}",
+    summary="Deletar usuário",
+    description="⚠️ **ATENÇÃO**: Esta operação é IRREVERSÍVEL e deleta permanentemente o usuário!"
+)
+async def delete_user(user_id: UUID):
+    pass
+
+# ✅ Use model_dump() corretamente para atualização parcial
+@router.patch("/users/{user_id}")
+async def partial_update(user_id: UUID, user_data: UserUpdate):
+    # exclude_unset=True ignora campos não fornecidos
+    update_data = user_data.model_dump(exclude_unset=True)
+    return await update_user(user_id, update_data)
+
+# ✅ Configure logging adequado
+import logging
+
+logger = logging.getLogger(__name__)
+
+@router.post("/users")
+async def create_user(user_data: UserCreate):
+    logger.info(f"Criando usuário: {user_data.email}")
+    try:
+        user = await service.create_user(user_data)
+        logger.info(f"Usuário criado com sucesso: {user.id}")
+        return user
+    except Exception as e:
+        logger.error(f"Erro ao criar usuário: {str(e)}", exc_info=True)
+        raise
+
+# ✅ Use APIRouter com configurações compartilhadas
+router = APIRouter(
+    prefix="/users",
+    tags=["users"],
+    dependencies=[Depends(verify_token)],  # Aplicado a todos os endpoints
+    responses={
+        401: {"description": "Não autenticado"},
+        403: {"description": "Sem permissão"}
+    }
+)
+```
+
+### ❌ **DON'Ts - Práticas a Evitar**
+
+```python
+# ❌ NÃO use status codes genéricos ou retornos sem status específico
+@router.post("/users")
+async def create_user():
+    return {"message": "success"}  # Sem status code 201
+
+# ✅ CORRETO
+@router.post("/users", status_code=status.HTTP_201_CREATED)
+async def create_user():
+    return user
+
+# ❌ NÃO ignore typing hints
+@router.get("/users/{user_id}")
+async def get_user(user_id):  # Tipo não especificado
+    pass
+
+# ✅ CORRETO
+@router.get("/users/{user_id}")
+async def get_user(user_id: UUID) -> UserResponse:
+    pass
+
+# ❌ NÃO coloque lógica de negócio diretamente no endpoint
+@router.post("/users")
+async def create_user(user: UserCreate, db: Session = Depends(get_db)):
+    # Lógica de negócio diretamente no endpoint
+    hashed_password = hash_password(user.password)
+    db_user = User(email=user.email, password=hashed_password)
+    db.add(db_user)
+    db.commit()
+    return db_user
+
+# ✅ CORRETO - Use Services
+@router.post("/users")
+async def create_user(user: UserCreate, db: Session = Depends(get_db)):
+    service = UserService(db)
+    return await service.create_user(user)
+
+# ❌ NÃO retorne exceções genéricas sem contexto
+@router.get("/users/{user_id}")
+async def get_user(user_id: UUID):
+    if not user:
+        raise HTTPException(500, "Error")  # Mensagem vaga
+
+# ✅ CORRETO
+@router.get("/users/{user_id}")
+async def get_user(user_id: UUID):
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Usuário com ID {user_id} não encontrado"
+        )
+
+# ❌ NÃO exponha dados sensíveis em responses
+@router.get("/users/{user_id}")
+async def get_user(user_id: UUID):
+    return user  # Pode incluir senha, tokens, etc
+
+# ✅ CORRETO - Use response_model
+@router.get("/users/{user_id}", response_model=UserResponse)
+async def get_user(user_id: UUID):
+    return user  # FastAPI filtra campos sensíveis automaticamente
+
+# ❌ NÃO use strings hardcoded para caminhos
+@router.get("/api/v1/users")  # Versão hardcoded
+async def get_users():
+    pass
+
+# ✅ CORRETO - Use prefixos no router
+router = APIRouter(prefix="/users")
+
+@router.get("/")  # Resulta em /api/v1/users automaticamente
+async def get_users():
+    pass
+
+# ❌ NÃO ignore validação de entrada
+@router.post("/users")
+async def create_user(email: str, name: str):  # Sem validação
+    pass
+
+# ✅ CORRETO - Use Pydantic models
+@router.post("/users")
+async def create_user(user: UserCreate):  # Validação automática
+    pass
+
+# ❌ NÃO retorne diferentes estruturas de resposta no mesmo endpoint
+@router.get("/users/{user_id}")
+async def get_user(user_id: UUID):
+    if user:
+        return {"data": user}
+    return {"error": "Not found"}  # Estrutura diferente
+
+# ✅ CORRETO - Estrutura consistente e use exceções
+@router.get("/users/{user_id}", response_model=UserResponse)
+async def get_user(user_id: UUID):
+    if not user:
+        raise HTTPException(status_code=404, detail="Not found")
+    return UserResponse(data=user)
+
+# ❌ NÃO deixe endpoints sem documentação
+@router.post("/users")
+async def create_user(user: UserCreate):
+    pass
+
+# ✅ CORRETO - Documente adequadamente
+@router.post(
+    "/users",
+    status_code=status.HTTP_201_CREATED,
+    summary="Criar novo usuário",
+    description="Cria um novo usuário no sistema com validação de email único",
+    response_model=UserResponse
+)
+async def create_user(user: UserCreate):
+    """
+    Cria um novo usuário com os seguintes dados:
+    - **email**: Email único do usuário
+    - **name**: Nome completo
+    - **password**: Senha (mínimo 8 caracteres)
+    """
+    pass
+
+# ❌ NÃO use CORS com allow_origins=["*"] em produção
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # INSEGURO
+    allow_credentials=True,
+)
+
+# ✅ CORRETO - Especifique origens permitidas
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://app.empresa.com",
+        "https://admin.empresa.com"
+    ],
+    allow_credentials=True,
+)
+
+# ❌ NÃO ignore paginação em listagens
+@router.get("/users")
+async def list_users():
+    return await get_all_users()  # Pode retornar milhares de registros
+
+# ✅ CORRETO - Sempre implemente paginação
+@router.get("/users")
+async def list_users(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000)
+):
+    return await get_users(skip=skip, limit=limit)
+
+# ❌ NÃO faça queries N+1 em loops
+@router.get("/users")
+async def list_users():
+    users = await get_all_users()
+    for user in users:
+        user.posts = await get_user_posts(user.id)  # Query para cada user
+    return users
+
+# ✅ CORRETO - Use joins ou eager loading
+@router.get("/users")
+async def list_users():
+    # Carrega users com posts em uma única query
+    users = await get_users_with_posts()
+    return users
+
+# ❌ NÃO use try/except genérico sem logging
+@router.post("/users")
+async def create_user(user: UserCreate):
+    try:
+        return await service.create_user(user)
+    except:  # Captura tudo sem log
+        return {"error": "Failed"}
+
+# ✅ CORRETO - Log erros e use exceções específicas
+@router.post("/users")
+async def create_user(user: UserCreate):
+    try:
+        return await service.create_user(user)
+    except IntegrityError as e:
+        logger.error(f"Erro de integridade: {e}")
+        raise HTTPException(409, "Email já cadastrado")
+    except Exception as e:
+        logger.error(f"Erro inesperado: {e}", exc_info=True)
+        raise
+
+# ❌ NÃO confunda PUT e PATCH
+@router.put("/users/{id}")  # PUT = substituição completa
+async def update_user(id: UUID, name: str):  # Apenas um campo
+    pass
+
+# ✅ CORRETO - Use PUT para substituição completa, PATCH para parcial
+@router.put("/users/{id}")
+async def replace_user(id: UUID, user: UserUpdate):  # Todos os campos
+    pass
+
+@router.patch("/users/{id}")
+async def update_user(id: UUID, user: UserUpdate):  # Campos opcionais
+    return await service.patch_user(id, user.model_dump(exclude_unset=True))
+
+# ❌ NÃO retorne 200 OK para operações de criação
+@router.post("/users", status_code=200)  # Status incorreto
+async def create_user(user: UserCreate):
+    pass
+
+# ✅ CORRETO - Use 201 Created
+@router.post("/users", status_code=status.HTTP_201_CREATED)
+async def create_user(user: UserCreate):
+    pass
+
+# ❌ NÃO deixe dependências sem tratamento de erro
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    user = decode_token(token)  # Pode falhar
+    return user
+
+# ✅ CORRETO - Trate erros em dependências
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    try:
+        user = decode_token(token)
+        if not user:
+            raise HTTPException(401, "Token inválido")
+        return user
+    except JWTError:
+        raise HTTPException(401, "Token inválido ou expirado")
+```
+
+**Esta rule deve ser rigorosamente seguida em todos os projetos FastAPI da organização.**

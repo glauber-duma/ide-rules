@@ -1,0 +1,2583 @@
+---
+Rule: fastapi-project.mdc
+Description: Diretrizes completa para projetos FastAPI, baseado em práticas de aplicações modernas.
+globs: ["**/*.py", "**/requirements*.txt", "**/pyproject.toml"]
+alwaysApply: false
+tags: ["fastapi", "api", "project", "modern"]
+Author: Glauber Duma
+Created: 2026-01
+---
+
+# FastAPI Project - Diretrizes para projetos FastAPI
+
+Esta regra estabelece padrões para o desenvolvimento de APIs baseado em análise de projetos reais e melhores práticas.
+
+## 🚀 **Estrutura do projeto FastAPI**
+
+### 1.1. Arquitetura Hexagonal (Ports and Adapters) / Clean Architecture
+
+```
+fastapi_project/
+├── src/
+│   └── app/
+│       ├── __init__.py
+│       ├── main.py                                    # ponto de entrada da aplicação
+│       ├── core/
+│       │   ├── configs/
+│       │   │   ├── __init__.py
+│       │   │   ├── config.py                          # Configurações (Pydantic Settings)
+│       │   │   ├── database.py                        # Configurações de banco de dados
+│       │   │   ├── security.py                        # Configurações de segurança
+│       │   │   ├── logging.py                         # Configurações de logs
+│       │   │   └── exception.py                       # Configurações de exceções
+│       │   └── containers/
+│       │       ├── __init__.py
+│       │       ├── app_container.py                   # Injeção de dependência da aplicação
+│       │       ├── infra_container.py                 # Injeção de dependência da infraestrutura
+│       │       ├── repositories_container.py          # Injeção de dependência dos repositórios
+│       │       ├── services_container.py              # Injeção de dependência dos serviços
+│       │       ├── usecases_container.py              # Injeção de dependência dos casos de uso
+│       │       └── external_container.py              # Injeção de dependência dos serviços externos
+│       ├── api/
+│       │   ├── __init__.py
+│       │   ├── v1/                                    # Versionamento
+│       │   │   ├── __init__.py
+│       │   │   ├── router.py                          # router principal v1
+│       │   │   ├── dependencies.py                    # dependências da v1
+│       │   │   ├── endpoints/                         # endpoints REST
+│       │   │   │   ├── __init__.py
+│       │   │   │   ├── auth.py                        # autenticação/autorização
+│       │   │   │   ├── user.py                        # usuários
+│       │   │   │   ├── items.py                       # produtos/itens
+│       │   │   │   └── health.py                      # health check
+│       │   │   ├── middleware.py                      # middlewares específicos da v1
+│       │   │   └── schemas/                           # schemas pydantic
+│       │   │       ├── __init__.py
+│       │   │       ├── auth.py                        # autenticação/autorização
+│       │   │       ├── user.py                        # usuários
+│       │   │       ├── items.py                       # produtos/itens
+│       │   │       └── common.py                      # esquemas comuns e reutilizáveis
+│       │   ├── v2/                                    # Versionamento
+│       │   │   ├── __init__.py
+│       │   │   ├── router.py                          # router principal v2
+│       │   │   ├── dependencies.py                    # dependências da v2
+│       │   │   ├── endpoints/                         # endpoints REST
+│       │   │   │   ├── __init__.py
+│       │   │   │   ├── auth.py                        # autenticação/autorização
+│       │   │   │   ├── user.py                        # usuários
+│       │   │   │   ├── items.py                       # produtos/itens
+│       │   │   │   └── health.py                      # health check
+│       │   │   ├── middleware.py                      # middlewares específicos da v2
+│       │   │   └── schemas/                           # schemas pydantic
+│       │   │       ├── __init__.py
+│       │   │       ├── auth.py                        # autenticação/autorização
+│       │   │       ├── user.py                        # usuários
+│       │   │       ├── items.py                       # produtos/itens
+│       │   │       └── common.py                      # esquemas comuns e reutilizáveis
+│       │   └── middlewares/                           # Middlewares Globais
+│       │       ├── __init__.py
+│       │       ├── correlation.py                     # Correlation ID
+│       │       ├── logging.py                         # Request/Response logging
+│       │       ├── security.py                        # Security headers
+│       │       └── error_handling.py                  # Error Handling
+│       ├── business/                                  # Lógica de negócios / use cases
+│       │   ├── __init__.py
+│       │   ├── services/                              # Serviços de domínio
+│       │   │   ├── __init__.py
+│       │   │   ├── auth_service.py
+│       │   │   ├── user_service.py
+│       │   │   └── item_service.py
+│       │   ├── validators/                            # Validações de negócio
+│       │   │   ├── __init__.py
+│       │   │   └── business_rules.py
+│       │   └── exceptions/                            # Exceções de negócio
+│       │       ├── __init__.py
+│       │       ├── auth_exceptions.py
+│       │       └── validations_exceptions.py
+│       ├── data/                                      # Camada de dados (adapters)
+│       │   ├── __init__.py
+│       │   ├── repositories/                          # Padrão repository
+│       │   │   ├── __init__.py
+│       │   │   ├── user_repository.py
+│       │   │   └── item_repository.py
+│       │   ├── models/                                # Modelos de dados ORM/ODM
+│       │   │   ├── __init__.py
+│       │   │   ├── base.py
+│       │   │   ├── user.py
+│       │   │   └── item.py
+│       │   └── migrations/                            # Migrações de banco
+│       │       └── versions/
+│       ├── adapters/                                  # Adapters para serviços externos
+│       │   ├── __init__.py
+│       │   ├── cache/                                 # Cache (Redis/Memcache, etc)
+│       │   │   ├── __init__.py
+│       │   │   ├── base.py
+│       │   │   └── redis_cache.py
+│       │   ├── messaging/                             # Mensageria (RabbitMQ, Kafka, Azure Service Bus)
+│       │   │   ├── __init__.py
+│       │   │   ├── producer.py
+│       │   │   └── consumer.py
+│       │   └── external_apis/                         # APIs externas
+│       │       ├── __init__.py
+│       │       └── payment_api.py
+│       ├── domain/                                    # Domínio da aplicação
+│       │   ├── __init__.py
+│       │   ├── entities/                              # Entidades do domínio
+│       │   │   ├── __init__.py
+│       │   │   ├── base.py
+│       │   │   ├── user.py
+│       │   │   └── item.py
+│       │   ├── value_objects/                         # Objetos de Valor
+│       │   │   ├── __init__.py
+│       │   │   ├── email.py
+│       │   │   └── address.py
+│       │   └── events/                                # Eventos do domínio
+│       │       ├── __init__.py
+│       │       └── user_events.py
+│       └── utils/                                     # Utilitários gerais
+│           ├── __init__.py
+│           ├── helpers.py
+│           ├── constants.py
+│           └── decorators.py
+├── tests/                                             # Estrutura de Testes
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── unit/
+│   ├── integration/
+│   └── e2e/
+├── docs/                                              # Documentação
+├── scripts/                                           # Scripts utilitários
+├── docker/                                            # Configurações Docker
+│   ├── Dockerfile
+│   └── docker-compose.yml
+├── .env.example                                       # Exemplo de variáveis de ambiente
+├── pyproject.toml                                     # Configuração do projeto
+├── requirements.txt                                   # Dependências
+└── README.md                                          # Documentação principal
+```
+
+---
+
+## 🛠️ **Configuração da Aplicação FastAPI**
+
+### 2.1. main.py - Ponto de Entrada Principal
+
+```python
+# src/app/main.py
+"""
+Ponto de entrada principal da aplicação FastAPI.
+Configura a aplicação, middlewares, rotas e handlers de exceção.
+"""
+
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
+
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse, ORJSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.api.middlewares.correlation import CorrelationMiddleware
+from app.api.middlewares.error_handling import ErrorHandlingMiddleware
+from app.api.middlewares.logging import LoggingMiddleware
+from app.api.middlewares.security import SecurityHeadersMiddleware
+from app.api.v1.router import api_router as api_router_v1
+from app.api.v2.router import api_router as api_router_v2
+from app.core.configs.config import settings
+from app.core.configs.database import database_manager
+from app.core.configs.logging import setup_logging
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """
+    Gerencia o ciclo de vida da aplicação.
+    
+    Startup:
+        - Inicializa logging
+        - Conecta ao banco de dados
+        - Inicializa cache
+        - Executa health checks
+    
+    Shutdown:
+        - Fecha conexões com banco de dados
+        - Libera recursos
+    """
+    # Startup
+    setup_logging()
+    await database_manager.connect()
+    
+    # Log de inicialização
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(
+        f"🚀 Aplicação iniciada - Ambiente: {settings.ENVIRONMENT} - "
+        f"Versão: {settings.VERSION}"
+    )
+    
+    yield
+    
+    # Shutdown
+    await database_manager.disconnect()
+    logger.info("🛑 Aplicação encerrada")
+
+
+def create_application() -> FastAPI:
+    """
+    Factory para criar e configurar a aplicação FastAPI.
+    
+    Returns:
+        FastAPI: Instância configurada da aplicação
+    """
+    app = FastAPI(
+        title=settings.PROJECT_NAME,
+        description=settings.PROJECT_DESCRIPTION,
+        version=settings.VERSION,
+        openapi_url=f"{settings.API_V1_PREFIX}/openapi.json" if settings.ENVIRONMENT != "production" else None,
+        docs_url=f"{settings.API_V1_PREFIX}/docs" if settings.ENVIRONMENT != "production" else None,
+        redoc_url=f"{settings.API_V1_PREFIX}/redoc" if settings.ENVIRONMENT != "production" else None,
+        default_response_class=ORJSONResponse,  # Melhor performance que JSONResponse
+        lifespan=lifespan,
+        swagger_ui_parameters={
+            "persistAuthorization": True,
+            "displayRequestDuration": True,
+            "filter": True,
+        },
+    )
+    
+    # Configurar middlewares (ordem importa!)
+    setup_middlewares(app)
+    
+    # Configurar handlers de exceção
+    setup_exception_handlers(app)
+    
+    # Configurar rotas
+    setup_routes(app)
+    
+    return app
+
+
+def setup_middlewares(app: FastAPI) -> None:
+    """
+    Configura todos os middlewares da aplicação.
+    A ordem de registro importa - primeiro registrado é o último executado.
+    """
+    # Middleware de segurança (executado por último)
+    if settings.ENVIRONMENT == "production":
+        app.add_middleware(
+            TrustedHostMiddleware,
+            allowed_hosts=settings.ALLOWED_HOSTS,
+        )
+    
+    # Compressão de respostas
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
+    
+    # CORS
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.CORS_ORIGINS,
+        allow_credentials=True,
+        allow_methods=settings.CORS_METHODS,
+        allow_headers=settings.CORS_HEADERS,
+        expose_headers=["X-Correlation-ID"],
+    )
+    
+    # Middlewares customizados
+    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(LoggingMiddleware)
+    app.add_middleware(CorrelationMiddleware)
+    app.add_middleware(ErrorHandlingMiddleware)
+
+
+def setup_exception_handlers(app: FastAPI) -> None:
+    """
+    Configura handlers customizados para exceções.
+    """
+    
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(
+        request: Request, 
+        exc: StarletteHTTPException
+    ) -> JSONResponse:
+        """Handler para exceções HTTP padrão."""
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": {
+                    "code": exc.status_code,
+                    "message": exc.detail,
+                    "type": "http_error",
+                },
+                "correlation_id": request.state.correlation_id,
+            },
+        )
+    
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(
+        request: Request, 
+        exc: RequestValidationError
+    ) -> JSONResponse:
+        """Handler para erros de validação do Pydantic."""
+        errors = []
+        for error in exc.errors():
+            errors.append({
+                "field": ".".join(str(x) for x in error["loc"][1:]),
+                "message": error["msg"],
+                "type": error["type"],
+            })
+        
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "error": {
+                    "code": 422,
+                    "message": "Erro de validação",
+                    "type": "validation_error",
+                    "details": errors,
+                },
+                "correlation_id": request.state.correlation_id,
+            },
+        )
+    
+    @app.exception_handler(Exception)
+    async def general_exception_handler(
+        request: Request, 
+        exc: Exception
+    ) -> JSONResponse:
+        """Handler para exceções não tratadas."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception(f"Erro não tratado: {exc}")
+        
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "error": {
+                    "code": 500,
+                    "message": "Erro interno do servidor",
+                    "type": "internal_error",
+                },
+                "correlation_id": request.state.correlation_id,
+            },
+        )
+
+
+def setup_routes(app: FastAPI) -> None:
+    """
+    Configura todas as rotas da aplicação.
+    """
+    # Health check na raiz
+    @app.get("/", tags=["health"], summary="Root Health Check")
+    async def root() -> dict:
+        """Endpoint de health check básico."""
+        return {
+            "status": "healthy",
+            "service": settings.PROJECT_NAME,
+            "version": settings.VERSION,
+            "environment": settings.ENVIRONMENT,
+        }
+    
+    # Rotas versionadas
+    app.include_router(
+        api_router_v1,
+        prefix=settings.API_V1_PREFIX,
+    )
+    
+    app.include_router(
+        api_router_v2,
+        prefix=settings.API_V2_PREFIX,
+    )
+
+
+# Criar instância da aplicação
+app = create_application()
+
+
+if __name__ == "__main__":
+    import uvicorn
+    
+    uvicorn.run(
+        "main:app",
+        host=settings.HOST,
+        port=settings.PORT,
+        reload=settings.ENVIRONMENT == "development",
+        log_level=settings.LOG_LEVEL.lower(),
+        access_log=True,
+    )
+```
+
+---
+
+### 2.2. Configurações com Pydantic Settings
+
+```python
+# src/app/core/configs/config.py
+"""
+Configurações da aplicação usando Pydantic Settings.
+Carrega variáveis de ambiente e fornece validação de tipos.
+"""
+
+from functools import lru_cache
+from typing import Any, List, Literal, Optional
+
+from pydantic import (
+    AnyHttpUrl,
+    EmailStr,
+    Field,
+    PostgresDsn,
+    RedisDsn,
+    field_validator,
+    model_validator,
+)
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """
+    Configurações principais da aplicação.
+    
+    Todas as configurações podem ser sobrescritas via variáveis de ambiente.
+    """
+    
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
+    
+    # ==================== APLICAÇÃO ====================
+    PROJECT_NAME: str = Field(
+        default="FastAPI Project",
+        description="Nome do projeto",
+    )
+    
+    PROJECT_DESCRIPTION: str = Field(
+        default="API REST moderna com FastAPI",
+        description="Descrição do projeto",
+    )
+    
+    VERSION: str = Field(
+        default="1.0.0",
+        description="Versão da aplicação",
+    )
+    
+    ENVIRONMENT: Literal["development", "staging", "production"] = Field(
+        default="development",
+        description="Ambiente de execução",
+    )
+    
+    DEBUG: bool = Field(
+        default=False,
+        description="Modo debug",
+    )
+    
+    HOST: str = Field(
+        default="0.0.0.0",
+        description="Host para bind do servidor",
+    )
+    
+    PORT: int = Field(
+        default=8000,
+        ge=1,
+        le=65535,
+        description="Porta do servidor",
+    )
+    
+    # ==================== API ====================
+    API_V1_PREFIX: str = Field(
+        default="/api/v1",
+        description="Prefixo para rotas da API v1",
+    )
+    
+    API_V2_PREFIX: str = Field(
+        default="/api/v2",
+        description="Prefixo para rotas da API v2",
+    )
+    
+    # ==================== CORS ====================
+    CORS_ORIGINS: List[str] = Field(
+        default=["http://localhost:3000", "http://localhost:8000"],
+        description="Origens permitidas para CORS",
+    )
+    
+    CORS_METHODS: List[str] = Field(
+        default=["*"],
+        description="Métodos HTTP permitidos",
+    )
+    
+    CORS_HEADERS: List[str] = Field(
+        default=["*"],
+        description="Headers permitidos",
+    )
+    
+    ALLOWED_HOSTS: List[str] = Field(
+        default=["localhost", "127.0.0.1"],
+        description="Hosts confiáveis",
+    )
+    
+    # ==================== SEGURANÇA ====================
+    SECRET_KEY: str = Field(
+        ...,
+        min_length=32,
+        description="Chave secreta para JWT e criptografia",
+    )
+    
+    ALGORITHM: str = Field(
+        default="HS256",
+        description="Algoritmo de criptografia JWT",
+    )
+    
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(
+        default=30,
+        ge=1,
+        description="Tempo de expiração do token de acesso (minutos)",
+    )
+    
+    REFRESH_TOKEN_EXPIRE_DAYS: int = Field(
+        default=7,
+        ge=1,
+        description="Tempo de expiração do token de refresh (dias)",
+    )
+    
+    PASSWORD_MIN_LENGTH: int = Field(
+        default=8,
+        ge=6,
+        description="Tamanho mínimo da senha",
+    )
+    
+    # ==================== BANCO DE DADOS ====================
+    DATABASE_URL: PostgresDsn = Field(
+        ...,
+        description="URL de conexão com PostgreSQL",
+    )
+    
+    DATABASE_POOL_SIZE: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Tamanho do pool de conexões",
+    )
+    
+    DATABASE_MAX_OVERFLOW: int = Field(
+        default=20,
+        ge=0,
+        description="Conexões adicionais além do pool",
+    )
+    
+    DATABASE_POOL_TIMEOUT: int = Field(
+        default=30,
+        ge=1,
+        description="Timeout para obter conexão do pool (segundos)",
+    )
+    
+    DATABASE_ECHO: bool = Field(
+        default=False,
+        description="Log de queries SQL",
+    )
+    
+    # ==================== REDIS ====================
+    REDIS_URL: Optional[RedisDsn] = Field(
+        default=None,
+        description="URL de conexão com Redis",
+    )
+    
+    REDIS_TTL: int = Field(
+        default=300,
+        ge=1,
+        description="TTL padrão do cache (segundos)",
+    )
+    
+    REDIS_MAX_CONNECTIONS: int = Field(
+        default=10,
+        ge=1,
+        description="Máximo de conexões no pool Redis",
+    )
+    
+    # ==================== LOGGING ====================
+    LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
+        default="INFO",
+        description="Nível de log",
+    )
+    
+    LOG_FORMAT: str = Field(
+        default="json",
+        description="Formato do log (json ou text)",
+    )
+    
+    LOG_FILE: Optional[str] = Field(
+        default=None,
+        description="Caminho do arquivo de log",
+    )
+    
+    # ==================== RATE LIMITING ====================
+    RATE_LIMIT_ENABLED: bool = Field(
+        default=True,
+        description="Ativar rate limiting",
+    )
+    
+    RATE_LIMIT_PER_MINUTE: int = Field(
+        default=60,
+        ge=1,
+        description="Requisições permitidas por minuto",
+    )
+    
+    # ==================== EMAIL ====================
+    SMTP_HOST: Optional[str] = Field(
+        default=None,
+        description="Host do servidor SMTP",
+    )
+    
+    SMTP_PORT: int = Field(
+        default=587,
+        ge=1,
+        le=65535,
+        description="Porta do servidor SMTP",
+    )
+    
+    SMTP_USER: Optional[str] = Field(
+        default=None,
+        description="Usuário SMTP",
+    )
+    
+    SMTP_PASSWORD: Optional[str] = Field(
+        default=None,
+        description="Senha SMTP",
+    )
+    
+    SMTP_FROM_EMAIL: Optional[EmailStr] = Field(
+        default=None,
+        description="Email remetente padrão",
+    )
+    
+    SMTP_FROM_NAME: Optional[str] = Field(
+        default=None,
+        description="Nome do remetente",
+    )
+    
+    # ==================== MONITORAMENTO ====================
+    SENTRY_DSN: Optional[str] = Field(
+        default=None,
+        description="DSN do Sentry para monitoramento de erros",
+    )
+    
+    ENABLE_METRICS: bool = Field(
+        default=True,
+        description="Habilitar coleta de métricas",
+    )
+    
+    # ==================== VALIDADORES ====================
+    
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v: Any) -> List[str]:
+        """Converte string separada por vírgula em lista."""
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(",")]
+        return v
+    
+    @field_validator("ALLOWED_HOSTS", mode="before")
+    @classmethod
+    def parse_allowed_hosts(cls, v: Any) -> List[str]:
+        """Converte string separada por vírgula em lista."""
+        if isinstance(v, str):
+            return [host.strip() for host in v.split(",")]
+        return v
+    
+    @model_validator(mode="after")
+    def validate_settings(self) -> "Settings":
+        """Validações customizadas após inicialização."""
+        # Em produção, certas configurações são obrigatórias
+        if self.ENVIRONMENT == "production":
+            if self.DEBUG:
+                raise ValueError("DEBUG não pode estar ativo em produção")
+            
+            if not self.SENTRY_DSN:
+                import warnings
+                warnings.warn(
+                    "SENTRY_DSN não configurado em produção. "
+                    "Monitoramento de erros desabilitado."
+                )
+        
+        return self
+    
+    # ==================== PROPRIEDADES COMPUTADAS ====================
+    
+    @property
+    def is_production(self) -> bool:
+        """Verifica se está em ambiente de produção."""
+        return self.ENVIRONMENT == "production"
+    
+    @property
+    def is_development(self) -> bool:
+        """Verifica se está em ambiente de desenvolvimento."""
+        return self.ENVIRONMENT == "development"
+    
+    @property
+    def database_url_sync(self) -> str:
+        """Retorna URL do banco de dados para uso síncrono."""
+        return str(self.DATABASE_URL).replace("postgresql+asyncpg://", "postgresql://")
+
+
+@lru_cache()
+def get_settings() -> Settings:
+    """
+    Retorna instância singleton das configurações.
+    O decorator @lru_cache garante que só será criada uma vez.
+    
+    Returns:
+        Settings: Instância das configurações
+    """
+    return Settings()
+
+
+# Instância global das configurações
+settings = get_settings()
+```
+
+---
+
+## 📄 **Esquemas Pydantic**
+
+### 3.1. Base Schemas e Padrões
+
+```python
+# src/app/api/v1/schemas/common.py
+"""
+Schemas base e padrões comuns reutilizáveis em toda a aplicação.
+Define estruturas de resposta padronizadas e classes base.
+"""
+
+from datetime import datetime
+from typing import Any, Dict, Generic, List, Optional, TypeVar
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+# ==================== CONFIGURAÇÃO BASE ====================
+
+class BaseSchema(BaseModel):
+    """
+    Schema base para todos os schemas da aplicação.
+    Define configurações comuns e validações.
+    """
+    
+    model_config = ConfigDict(
+        # Permite usar modelos ORM diretamente
+        from_attributes=True,
+        # Valida atribuições após inicialização
+        validate_assignment=True,
+        # Usa enum values em vez de enum objects
+        use_enum_values=True,
+        # Serialização de campos extras
+        extra="forbid",
+        # Permite campos populados pelo ORM
+        populate_by_name=True,
+        # Serialização customizada para datas
+        json_encoders={
+            datetime: lambda v: v.isoformat(),
+            UUID: lambda v: str(v),
+        },
+    )
+
+
+# ==================== SCHEMAS DE TIMESTAMP ====================
+
+class TimestampSchema(BaseSchema):
+    """
+    Schema base que inclui campos de auditoria temporal.
+    """
+    created_at: datetime = Field(
+        description="Data e hora de criação do registro",
+        examples=["2026-01-23T10:30:00Z"],
+    )
+    
+    updated_at: datetime = Field(
+        description="Data e hora da última atualização",
+        examples=["2026-01-23T15:45:00Z"],
+    )
+
+
+class SoftDeleteSchema(TimestampSchema):
+    """
+    Schema base para entidades com soft delete.
+    """
+    deleted_at: Optional[datetime] = Field(
+        default=None,
+        description="Data e hora da exclusão lógica",
+        examples=["2026-01-23T20:00:00Z"],
+    )
+    
+    is_active: bool = Field(
+        default=True,
+        description="Indica se o registro está ativo",
+        examples=[True],
+    )
+
+
+# ==================== SCHEMAS DE PAGINAÇÃO ====================
+
+class PaginationParams(BaseSchema):
+    """
+    Parâmetros de paginação para listagem de recursos.
+    """
+    page: int = Field(
+        default=1,
+        ge=1,
+        description="Número da página (começa em 1)",
+        examples=[1],
+    )
+    
+    page_size: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Quantidade de itens por página",
+        examples=[20],
+    )
+    
+    @property
+    def offset(self) -> int:
+        """Calcula o offset para a query."""
+        return (self.page - 1) * self.page_size
+    
+    @property
+    def limit(self) -> int:
+        """Retorna o limite de itens."""
+        return self.page_size
+
+
+class PageInfo(BaseSchema):
+    """
+    Informações de paginação na resposta.
+    """
+    page: int = Field(
+        description="Página atual",
+        examples=[1],
+    )
+    
+    page_size: int = Field(
+        description="Tamanho da página",
+        examples=[20],
+    )
+    
+    total_items: int = Field(
+        description="Total de itens disponíveis",
+        examples=[150],
+    )
+    
+    total_pages: int = Field(
+        description="Total de páginas",
+        examples=[8],
+    )
+    
+    has_next: bool = Field(
+        description="Indica se existe próxima página",
+        examples=[True],
+    )
+    
+    has_previous: bool = Field(
+        description="Indica se existe página anterior",
+        examples=[False],
+    )
+
+
+T = TypeVar("T")
+
+
+class PaginatedResponse(BaseSchema, Generic[T]):
+    """
+    Resposta paginada genérica.
+    
+    Usage:
+        PaginatedResponse[UserResponse](
+            items=[...],
+            pagination=PageInfo(...)
+        )
+    """
+    items: List[T] = Field(
+        description="Lista de itens da página atual",
+    )
+    
+    pagination: PageInfo = Field(
+        description="Informações de paginação",
+    )
+
+
+# ==================== SCHEMAS DE RESPOSTA PADRÃO ====================
+
+class SuccessResponse(BaseSchema):
+    """
+    Resposta de sucesso padrão para operações sem retorno de dados.
+    """
+    success: bool = Field(
+        default=True,
+        description="Indica sucesso da operação",
+    )
+    
+    message: str = Field(
+        description="Mensagem descritiva",
+        examples=["Operação realizada com sucesso"],
+    )
+    
+    data: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Dados adicionais opcionais",
+    )
+
+
+class ErrorDetail(BaseSchema):
+    """
+    Detalhes de um erro específico.
+    """
+    field: Optional[str] = Field(
+        default=None,
+        description="Campo relacionado ao erro",
+        examples=["email"],
+    )
+    
+    message: str = Field(
+        description="Mensagem de erro",
+        examples=["Email inválido"],
+    )
+    
+    type: str = Field(
+        description="Tipo do erro",
+        examples=["value_error.email"],
+    )
+
+
+class ErrorResponse(BaseSchema):
+    """
+    Resposta de erro padrão.
+    """
+    error: Dict[str, Any] = Field(
+        description="Informações do erro",
+        examples=[{
+            "code": 400,
+            "message": "Requisição inválida",
+            "type": "validation_error",
+            "details": []
+        }],
+    )
+    
+    correlation_id: str = Field(
+        description="ID de correlação para rastreamento",
+        examples=["550e8400-e29b-41d4-a716-446655440000"],
+    )
+
+
+# ==================== SCHEMAS DE FILTRO ====================
+
+class FilterParams(BaseSchema):
+    """
+    Parâmetros base para filtros de busca.
+    """
+    search: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+        description="Termo de busca geral",
+        examples=["usuario@example.com"],
+    )
+    
+    sort_by: Optional[str] = Field(
+        default=None,
+        description="Campo para ordenação",
+        examples=["created_at"],
+    )
+    
+    sort_order: Optional[str] = Field(
+        default="desc",
+        pattern="^(asc|desc)$",
+        description="Direção da ordenação (asc ou desc)",
+        examples=["desc"],
+    )
+    
+    @field_validator("sort_order")
+    @classmethod
+    def validate_sort_order(cls, v: Optional[str]) -> Optional[str]:
+        """Valida e normaliza sort_order."""
+        if v:
+            return v.lower()
+        return v
+
+
+# ==================== SCHEMAS DE METADATA ====================
+
+class MetadataResponse(BaseSchema):
+    """
+    Metadados adicionais em respostas.
+    """
+    timestamp: datetime = Field(
+        default_factory=datetime.utcnow,
+        description="Timestamp da resposta",
+    )
+    
+    version: str = Field(
+        description="Versão da API",
+        examples=["1.0.0"],
+    )
+    
+    correlation_id: Optional[str] = Field(
+        default=None,
+        description="ID de correlação",
+    )
+
+
+# ==================== SCHEMAS DE HEALTH CHECK ====================
+
+class HealthCheckResponse(BaseSchema):
+    """
+    Resposta do health check.
+    """
+    status: str = Field(
+        description="Status da aplicação",
+        examples=["healthy"],
+    )
+    
+    service: str = Field(
+        description="Nome do serviço",
+        examples=["FastAPI Project"],
+    )
+    
+    version: str = Field(
+        description="Versão da aplicação",
+        examples=["1.0.0"],
+    )
+    
+    environment: str = Field(
+        description="Ambiente de execução",
+        examples=["production"],
+    )
+    
+    checks: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Verificações detalhadas de componentes",
+        examples=[{
+            "database": "healthy",
+            "cache": "healthy",
+            "external_api": "degraded"
+        }],
+    )
+
+
+# ==================== SCHEMAS DE ID ====================
+
+class IDResponse(BaseSchema):
+    """
+    Resposta simples contendo apenas o ID do recurso criado.
+    """
+    id: UUID = Field(
+        description="ID do recurso",
+        examples=["550e8400-e29b-41d4-a716-446655440000"],
+    )
+
+
+class MessageResponse(BaseSchema):
+    """
+    Resposta simples com mensagem.
+    """
+    message: str = Field(
+        description="Mensagem de retorno",
+        examples=["Operação realizada com sucesso"],
+    )
+```
+
+---
+
+### 3.2. Domain-Specific Schemas
+
+```python
+# src/app/api/v1/schemas/user.py
+"""
+Schemas Pydantic para o domínio de usuários.
+Define estruturas de request e response para operações de usuário.
+"""
+
+import re
+from datetime import datetime
+from typing import Optional
+from uuid import UUID
+
+from pydantic import EmailStr, Field, field_validator, model_validator
+
+from app.api.v1.schemas.common import (
+    BaseSchema,
+    FilterParams,
+    PaginationParams,
+    TimestampSchema,
+)
+
+
+# ==================== ENUMS ====================
+
+class UserRole(str):
+    """Roles disponíveis para usuários."""
+    ADMIN = "admin"
+    USER = "user"
+    MODERATOR = "moderator"
+
+
+class UserStatus(str):
+    """Status possíveis de um usuário."""
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    SUSPENDED = "suspended"
+    PENDING = "pending"
+
+
+# ==================== REQUEST SCHEMAS ====================
+
+class UserCreateRequest(BaseSchema):
+    """
+    Schema para criação de usuário.
+    """
+    email: EmailStr = Field(
+        description="Email do usuário (único)",
+        examples=["usuario@example.com"],
+    )
+    
+    username: str = Field(
+        min_length=3,
+        max_length=50,
+        pattern="^[a-zA-Z0-9_-]+$",
+        description="Nome de usuário (único, alfanumérico com _ e -)",
+        examples=["usuario_exemplo"],
+    )
+    
+    password: str = Field(
+        min_length=8,
+        max_length=100,
+        description="Senha do usuário (mínimo 8 caracteres)",
+        examples=["SenhaSegura123!"],
+    )
+    
+    full_name: str = Field(
+        min_length=3,
+        max_length=100,
+        description="Nome completo do usuário",
+        examples=["João da Silva"],
+    )
+    
+    phone: Optional[str] = Field(
+        default=None,
+        pattern=r"^\+?[1-9]\d{1,14}$",
+        description="Telefone no formato E.164",
+        examples=["+5511999999999"],
+    )
+    
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, v: str) -> str:
+        """
+        Valida a força da senha.
+        Deve conter: maiúscula, minúscula, número e caractere especial.
+        """
+        if not re.search(r"[A-Z]", v):
+            raise ValueError("Senha deve conter pelo menos uma letra maiúscula")
+        
+        if not re.search(r"[a-z]", v):
+            raise ValueError("Senha deve conter pelo menos uma letra minúscula")
+        
+        if not re.search(r"\d", v):
+            raise ValueError("Senha deve conter pelo menos um número")
+        
+        if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", v):
+            raise ValueError("Senha deve conter pelo menos um caractere especial")
+        
+        return v
+    
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, v: str) -> str:
+        """Normaliza username para lowercase."""
+        return v.lower()
+    
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        """Normaliza email para lowercase."""
+        return v.lower()
+
+
+class UserUpdateRequest(BaseSchema):
+    """
+    Schema para atualização de usuário.
+    Todos os campos são opcionais.
+    """
+    full_name: Optional[str] = Field(
+        default=None,
+        min_length=3,
+        max_length=100,
+        description="Nome completo do usuário",
+        examples=["João da Silva"],
+    )
+    
+    phone: Optional[str] = Field(
+        default=None,
+        pattern=r"^\+?[1-9]\d{1,14}$",
+        description="Telefone no formato E.164",
+        examples=["+5511999999999"],
+    )
+    
+    bio: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        description="Biografia do usuário",
+        examples=["Desenvolvedor Python apaixonado por tecnologia"],
+    )
+    
+    avatar_url: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        description="URL do avatar do usuário",
+        examples=["https://example.com/avatar.jpg"],
+    )
+    
+    @model_validator(mode="after")
+    def check_at_least_one_field(self) -> "UserUpdateRequest":
+        """Valida que pelo menos um campo foi fornecido."""
+        if not any([
+            self.full_name,
+            self.phone,
+            self.bio,
+            self.avatar_url,
+        ]):
+            raise ValueError("Pelo menos um campo deve ser fornecido para atualização")
+        
+        return self
+
+
+class UserChangePasswordRequest(BaseSchema):
+    """
+    Schema para alteração de senha.
+    """
+    current_password: str = Field(
+        description="Senha atual do usuário",
+        examples=["SenhaAtual123!"],
+    )
+    
+    new_password: str = Field(
+        min_length=8,
+        max_length=100,
+        description="Nova senha do usuário",
+        examples=["NovaSenha456!"],
+    )
+    
+    confirm_password: str = Field(
+        description="Confirmação da nova senha",
+        examples=["NovaSenha456!"],
+    )
+    
+    @model_validator(mode="after")
+    def validate_passwords_match(self) -> "UserChangePasswordRequest":
+        """Valida que a nova senha e confirmação são iguais."""
+        if self.new_password != self.confirm_password:
+            raise ValueError("Nova senha e confirmação não correspondem")
+        
+        if self.current_password == self.new_password:
+            raise ValueError("Nova senha deve ser diferente da senha atual")
+        
+        return self
+    
+    @field_validator("new_password")
+    @classmethod
+    def validate_password_strength(cls, v: str) -> str:
+        """Valida a força da nova senha."""
+        if not re.search(r"[A-Z]", v):
+            raise ValueError("Senha deve conter pelo menos uma letra maiúscula")
+        
+        if not re.search(r"[a-z]", v):
+            raise ValueError("Senha deve conter pelo menos uma letra minúscula")
+        
+        if not re.search(r"\d", v):
+            raise ValueError("Senha deve conter pelo menos um número")
+        
+        if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", v):
+            raise ValueError("Senha deve conter pelo menos um caractere especial")
+        
+        return v
+
+
+# ==================== RESPONSE SCHEMAS ====================
+
+class UserResponse(TimestampSchema):
+    """
+    Schema de resposta com dados do usuário.
+    Nunca expõe a senha ou informações sensíveis.
+    """
+    id: UUID = Field(
+        description="ID único do usuário",
+        examples=["550e8400-e29b-41d4-a716-446655440000"],
+    )
+    
+    email: EmailStr = Field(
+        description="Email do usuário",
+        examples=["usuario@example.com"],
+    )
+    
+    username: str = Field(
+        description="Nome de usuário",
+        examples=["usuario_exemplo"],
+    )
+    
+    full_name: str = Field(
+        description="Nome completo",
+        examples=["João da Silva"],
+    )
+    
+    phone: Optional[str] = Field(
+        default=None,
+        description="Telefone",
+        examples=["+5511999999999"],
+    )
+    
+    bio: Optional[str] = Field(
+        default=None,
+        description="Biografia",
+        examples=["Desenvolvedor Python"],
+    )
+    
+    avatar_url: Optional[str] = Field(
+        default=None,
+        description="URL do avatar",
+        examples=["https://example.com/avatar.jpg"],
+    )
+    
+    role: str = Field(
+        description="Role do usuário",
+        examples=["user"],
+    )
+    
+    status: str = Field(
+        description="Status do usuário",
+        examples=["active"],
+    )
+    
+    is_verified: bool = Field(
+        description="Indica se o email foi verificado",
+        examples=[True],
+    )
+    
+    last_login: Optional[datetime] = Field(
+        default=None,
+        description="Data do último login",
+        examples=["2026-01-23T10:30:00Z"],
+    )
+
+
+class UserListResponse(TimestampSchema):
+    """
+    Schema de resposta resumida para listagem de usuários.
+    Contém apenas informações essenciais.
+    """
+    id: UUID = Field(
+        description="ID único do usuário",
+    )
+    
+    email: EmailStr = Field(
+        description="Email do usuário",
+    )
+    
+    username: str = Field(
+        description="Nome de usuário",
+    )
+    
+    full_name: str = Field(
+        description="Nome completo",
+    )
+    
+    avatar_url: Optional[str] = Field(
+        default=None,
+        description="URL do avatar",
+    )
+    
+    role: str = Field(
+        description="Role do usuário",
+    )
+    
+    status: str = Field(
+        description="Status do usuário",
+    )
+
+
+class UserProfileResponse(UserResponse):
+    """
+    Schema de resposta do perfil do usuário.
+    Inclui informações adicionais e estatísticas.
+    """
+    total_posts: int = Field(
+        default=0,
+        description="Total de posts do usuário",
+        examples=[42],
+    )
+    
+    total_followers: int = Field(
+        default=0,
+        description="Total de seguidores",
+        examples=[150],
+    )
+    
+    total_following: int = Field(
+        default=0,
+        description="Total de usuários seguidos",
+        examples=[75],
+    )
+
+
+# ==================== FILTER SCHEMAS ====================
+
+class UserFilterParams(FilterParams, PaginationParams):
+    """
+    Parâmetros de filtro para listagem de usuários.
+    Combina filtros específicos com paginação.
+    """
+    role: Optional[str] = Field(
+        default=None,
+        description="Filtrar por role",
+        examples=["user"],
+    )
+    
+    status: Optional[str] = Field(
+        default=None,
+        description="Filtrar por status",
+        examples=["active"],
+    )
+    
+    is_verified: Optional[bool] = Field(
+        default=None,
+        description="Filtrar por verificação de email",
+        examples=[True],
+    )
+    
+    created_after: Optional[datetime] = Field(
+        default=None,
+        description="Filtrar usuários criados após esta data",
+        examples=["2026-01-01T00:00:00Z"],
+    )
+    
+    created_before: Optional[datetime] = Field(
+        default=None,
+        description="Filtrar usuários criados antes desta data",
+        examples=["2026-12-31T23:59:59Z"],
+    )
+```
+
+---
+
+## 🗺️ **Endpoints e Roteamento**
+
+### 4.1. Endpoint Implementation Patterns
+
+```python
+# src/app/api/v1/endpoints/user.py
+"""
+Endpoints REST para operações de usuário.
+Implementa CRUD completo com validações, autenticação e autorização.
+"""
+
+from typing import List
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.v1.dependencies import (
+    get_current_active_user,
+    get_current_admin_user,
+    get_db,
+)
+from app.api.v1.schemas.common import (
+    MessageResponse,
+    PaginatedResponse,
+    SuccessResponse,
+)
+from app.api.v1.schemas.user import (
+    UserChangePasswordRequest,
+    UserCreateRequest,
+    UserFilterParams,
+    UserListResponse,
+    UserProfileResponse,
+    UserResponse,
+    UserUpdateRequest,
+)
+from app.business.services.user_service import UserService
+from app.data.models.user import User
+
+
+router = APIRouter(prefix="/users", tags=["users"])
+
+
+# ==================== ENDPOINTS PÚBLICOS ====================
+
+@router.post(
+    "/",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Criar novo usuário",
+    description="Registra um novo usuário no sistema. Email e username devem ser únicos.",
+    responses={
+        201: {
+            "description": "Usuário criado com sucesso",
+            "model": UserResponse,
+        },
+        400: {
+            "description": "Dados inválidos ou usuário já existe",
+        },
+        422: {
+            "description": "Erro de validação",
+        },
+    },
+)
+async def create_user(
+    user_data: UserCreateRequest,
+    db: AsyncSession = Depends(get_db),
+) -> UserResponse:
+    """
+    Cria um novo usuário.
+    
+    - **email**: Email único do usuário
+    - **username**: Nome de usuário único
+    - **password**: Senha forte (min 8 caracteres, com maiúscula, minúscula, número e especial)
+    - **full_name**: Nome completo
+    - **phone**: Telefone opcional no formato E.164
+    """
+    user_service = UserService(db)
+    
+    # Verificar se usuário já existe
+    existing_user = await user_service.get_by_email(user_data.email)
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email já cadastrado",
+        )
+    
+    existing_username = await user_service.get_by_username(user_data.username)
+    if existing_username:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username já cadastrado",
+        )
+    
+    # Criar usuário
+    user = await user_service.create(user_data)
+    
+    return UserResponse.model_validate(user)
+
+
+# ==================== ENDPOINTS AUTENTICADOS ====================
+
+@router.get(
+    "/me",
+    response_model=UserProfileResponse,
+    summary="Obter perfil do usuário atual",
+    description="Retorna informações completas do perfil do usuário autenticado.",
+    responses={
+        200: {
+            "description": "Perfil do usuário",
+            "model": UserProfileResponse,
+        },
+        401: {
+            "description": "Não autenticado",
+        },
+    },
+)
+async def get_current_user_profile(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserProfileResponse:
+    """
+    Obtém o perfil completo do usuário autenticado.
+    
+    Inclui informações pessoais e estatísticas.
+    """
+    user_service = UserService(db)
+    user_profile = await user_service.get_profile(current_user.id)
+    
+    return UserProfileResponse.model_validate(user_profile)
+
+
+@router.patch(
+    "/me",
+    response_model=UserResponse,
+    summary="Atualizar perfil do usuário atual",
+    description="Atualiza informações do perfil do usuário autenticado.",
+    responses={
+        200: {
+            "description": "Perfil atualizado com sucesso",
+            "model": UserResponse,
+        },
+        401: {
+            "description": "Não autenticado",
+        },
+        422: {
+            "description": "Erro de validação",
+        },
+    },
+)
+async def update_current_user(
+    user_data: UserUpdateRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserResponse:
+    """
+    Atualiza o perfil do usuário autenticado.
+    
+    Apenas os campos fornecidos serão atualizados.
+    """
+    user_service = UserService(db)
+    updated_user = await user_service.update(current_user.id, user_data)
+    
+    return UserResponse.model_validate(updated_user)
+
+
+@router.post(
+    "/me/change-password",
+    response_model=MessageResponse,
+    summary="Alterar senha",
+    description="Altera a senha do usuário autenticado.",
+    responses={
+        200: {
+            "description": "Senha alterada com sucesso",
+            "model": MessageResponse,
+        },
+        400: {
+            "description": "Senha atual incorreta",
+        },
+        401: {
+            "description": "Não autenticado",
+        },
+    },
+)
+async def change_password(
+    password_data: UserChangePasswordRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> MessageResponse:
+    """
+    Altera a senha do usuário.
+    
+    Requer a senha atual para validação de segurança.
+    """
+    user_service = UserService(db)
+    
+    # Verificar senha atual
+    if not await user_service.verify_password(
+        current_user, 
+        password_data.current_password
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Senha atual incorreta",
+        )
+    
+    # Alterar senha
+    await user_service.change_password(
+        current_user.id,
+        password_data.new_password,
+    )
+    
+    return MessageResponse(message="Senha alterada com sucesso")
+
+
+@router.delete(
+    "/me",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Excluir conta",
+    description="Exclui a conta do usuário autenticado (soft delete).",
+    responses={
+        204: {
+            "description": "Conta excluída com sucesso",
+        },
+        401: {
+            "description": "Não autenticado",
+        },
+    },
+)
+async def delete_current_user(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """
+    Exclui a conta do usuário autenticado.
+    
+    Realiza soft delete - os dados são mantidos mas marcados como excluídos.
+    """
+    user_service = UserService(db)
+    await user_service.soft_delete(current_user.id)
+    
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ==================== ENDPOINTS DE CONSULTA ====================
+
+@router.get(
+    "/",
+    response_model=PaginatedResponse[UserListResponse],
+    summary="Listar usuários",
+    description="Retorna lista paginada de usuários com filtros opcionais.",
+    responses={
+        200: {
+            "description": "Lista de usuários",
+            "model": PaginatedResponse[UserListResponse],
+        },
+        401: {
+            "description": "Não autenticado",
+        },
+    },
+)
+async def list_users(
+    filters: UserFilterParams = Depends(),
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> PaginatedResponse[UserListResponse]:
+    """
+    Lista usuários com paginação e filtros.
+    
+    **Filtros disponíveis:**
+    - search: Busca por email, username ou nome
+    - role: Filtrar por role (admin, user, moderator)
+    - status: Filtrar por status (active, inactive, suspended)
+    - is_verified: Filtrar por verificação de email
+    - created_after: Usuários criados após data
+    - created_before: Usuários criados antes de data
+    - sort_by: Campo para ordenação
+    - sort_order: Direção (asc/desc)
+    - page: Número da página
+    - page_size: Itens por página (max 100)
+    """
+    user_service = UserService(db)
+    
+    # Buscar usuários com filtros
+    users, total = await user_service.list_users(filters)
+    
+    # Calcular informações de paginação
+    total_pages = (total + filters.page_size - 1) // filters.page_size
+    
+    from app.api.v1.schemas.common import PageInfo
+    
+    return PaginatedResponse[UserListResponse](
+        items=[UserListResponse.model_validate(user) for user in users],
+        pagination=PageInfo(
+            page=filters.page,
+            page_size=filters.page_size,
+            total_items=total,
+            total_pages=total_pages,
+            has_next=filters.page < total_pages,
+            has_previous=filters.page > 1,
+        ),
+    )
+
+
+@router.get(
+    "/{user_id}",
+    response_model=UserResponse,
+    summary="Obter usuário por ID",
+    description="Retorna informações de um usuário específico.",
+    responses={
+        200: {
+            "description": "Dados do usuário",
+            "model": UserResponse,
+        },
+        401: {
+            "description": "Não autenticado",
+        },
+        404: {
+            "description": "Usuário não encontrado",
+        },
+    },
+)
+async def get_user_by_id(
+    user_id: UUID,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserResponse:
+    """
+    Obtém informações de um usuário específico pelo ID.
+    """
+    user_service = UserService(db)
+    user = await user_service.get_by_id(user_id)
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Usuário não encontrado",
+        )
+    
+    return UserResponse.model_validate(user)
+
+
+@router.get(
+    "/username/{username}",
+    response_model=UserResponse,
+    summary="Obter usuário por username",
+    description="Retorna informações de um usuário pelo username.",
+    responses={
+        200: {
+            "description": "Dados do usuário",
+            "model": UserResponse,
+        },
+        401: {
+            "description": "Não autenticado",
+        },
+        404: {
+            "description": "Usuário não encontrado",
+        },
+    },
+)
+async def get_user_by_username(
+    username: str,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserResponse:
+    """
+    Obtém informações de um usuário pelo username.
+    """
+    user_service = UserService(db)
+    user = await user_service.get_by_username(username)
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Usuário não encontrado",
+        )
+    
+    return UserResponse.model_validate(user)
+
+
+# ==================== ENDPOINTS ADMINISTRATIVOS ====================
+
+@router.patch(
+    "/{user_id}/role",
+    response_model=UserResponse,
+    summary="Alterar role do usuário",
+    description="Altera a role de um usuário. Requer permissão de administrador.",
+    responses={
+        200: {
+            "description": "Role alterada com sucesso",
+            "model": UserResponse,
+        },
+        401: {
+            "description": "Não autenticado",
+        },
+        403: {
+            "description": "Sem permissão",
+        },
+        404: {
+            "description": "Usuário não encontrado",
+        },
+    },
+)
+async def change_user_role(
+    user_id: UUID,
+    role: str = Query(..., description="Nova role (admin, user, moderator)"),
+    current_user: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserResponse:
+    """
+    Altera a role de um usuário.
+    
+    **Requer permissão de administrador.**
+    """
+    user_service = UserService(db)
+    
+    # Validar role
+    from app.api.v1.schemas.user import UserRole
+    valid_roles = [UserRole.ADMIN, UserRole.USER, UserRole.MODERATOR]
+    if role not in valid_roles:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Role inválida. Opções: {', '.join(valid_roles)}",
+        )
+    
+    # Atualizar role
+    user = await user_service.change_role(user_id, role)
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Usuário não encontrado",
+        )
+    
+    return UserResponse.model_validate(user)
+
+
+@router.patch(
+    "/{user_id}/status",
+    response_model=UserResponse,
+    summary="Alterar status do usuário",
+    description="Altera o status de um usuário. Requer permissão de administrador.",
+    responses={
+        200: {
+            "description": "Status alterado com sucesso",
+            "model": UserResponse,
+        },
+        401: {
+            "description": "Não autenticado",
+        },
+        403: {
+            "description": "Sem permissão",
+        },
+        404: {
+            "description": "Usuário não encontrado",
+        },
+    },
+)
+async def change_user_status(
+    user_id: UUID,
+    new_status: str = Query(..., description="Novo status (active, inactive, suspended)"),
+    current_user: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserResponse:
+    """
+    Altera o status de um usuário.
+    
+    **Requer permissão de administrador.**
+    """
+    user_service = UserService(db)
+    
+    # Validar status
+    from app.api.v1.schemas.user import UserStatus
+    valid_statuses = [
+        UserStatus.ACTIVE,
+        UserStatus.INACTIVE,
+        UserStatus.SUSPENDED,
+    ]
+    if new_status not in valid_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Status inválido. Opções: {', '.join(valid_statuses)}",
+        )
+    
+    # Atualizar status
+    user = await user_service.change_status(user_id, new_status)
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Usuário não encontrado",
+        )
+    
+    return UserResponse.model_validate(user)
+
+
+@router.delete(
+    "/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Excluir usuário",
+    description="Exclui permanentemente um usuário. Requer permissão de administrador.",
+    responses={
+        204: {
+            "description": "Usuário excluído com sucesso",
+        },
+        401: {
+            "description": "Não autenticado",
+        },
+        403: {
+            "description": "Sem permissão",
+        },
+        404: {
+            "description": "Usuário não encontrado",
+        },
+    },
+)
+async def delete_user(
+    user_id: UUID,
+    permanent: bool = Query(
+        False,
+        description="Se True, exclui permanentemente. Se False, soft delete",
+    ),
+    current_user: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """
+    Exclui um usuário.
+    
+    **Requer permissão de administrador.**
+    
+    - **permanent=false**: Soft delete (mantém dados marcados como excluídos)
+    - **permanent=true**: Hard delete (remove permanentemente do banco)
+    """
+    user_service = UserService(db)
+    
+    if permanent:
+        success = await user_service.hard_delete(user_id)
+    else:
+        success = await user_service.soft_delete(user_id)
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Usuário não encontrado",
+        )
+    
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+```
+
+---
+
+### 4.2. Dependencies Pattern
+
+```python
+# src/app/api/v1/dependencies.py
+"""
+Dependências reutilizáveis para endpoints da API.
+Implementa padrões de injeção de dependência, autenticação e autorização.
+"""
+
+from typing import AsyncGenerator, Optional
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError, jwt
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.configs.config import settings
+from app.core.configs.database import database_manager
+from app.data.models.user import User
+from app.data.repositories.user_repository import UserRepository
+
+
+# ==================== SEGURANÇA ====================
+
+security = HTTPBearer(
+    scheme_name="Bearer Token",
+    description="JWT Bearer token obtido no endpoint de login",
+    auto_error=True,
+)
+
+
+# ==================== DATABASE ====================
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Dependência para obter sessão do banco de dados.
+    
+    Yields:
+        AsyncSession: Sessão do SQLAlchemy
+        
+    Usage:
+        @app.get("/users")
+        async def get_users(db: AsyncSession = Depends(get_db)):
+            # usar db aqui
+    """
+    async with database_manager.get_session() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
+
+
+# ==================== AUTENTICAÇÃO ====================
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """
+    Dependência para obter o usuário autenticado pelo token JWT.
+    
+    Args:
+        credentials: Credenciais do header Authorization
+        db: Sessão do banco de dados
+        
+    Returns:
+        User: Usuário autenticado
+        
+    Raises:
+        HTTPException: Se token inválido ou usuário não encontrado
+        
+    Usage:
+        @app.get("/profile")
+        async def get_profile(user: User = Depends(get_current_user)):
+            return user
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Não foi possível validar as credenciais",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    try:
+        # Decodificar token JWT
+        token = credentials.credentials
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+        )
+        
+        # Extrair user_id do payload
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+            
+    except JWTError:
+        raise credentials_exception
+    
+    # Buscar usuário no banco
+    user_repository = UserRepository(db)
+    user = await user_repository.get_by_id(user_id)
+    
+    if user is None:
+        raise credentials_exception
+    
+    return user
+
+
+async def get_current_active_user(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """
+    Dependência para garantir que o usuário está ativo.
+    
+    Args:
+        current_user: Usuário autenticado
+        
+    Returns:
+        User: Usuário ativo
+        
+    Raises:
+        HTTPException: Se usuário inativo
+        
+    Usage:
+        @app.get("/protected")
+        async def protected_route(user: User = Depends(get_current_active_user)):
+            return {"message": "Protected resource"}
+    """
+    if not current_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Usuário inativo",
+        )
+    
+    return current_user
+
+
+async def get_current_verified_user(
+    current_user: User = Depends(get_current_active_user),
+) -> User:
+    """
+    Dependência para garantir que o usuário tem email verificado.
+    
+    Args:
+        current_user: Usuário ativo
+        
+    Returns:
+        User: Usuário verificado
+        
+    Raises:
+        HTTPException: Se email não verificado
+        
+    Usage:
+        @app.post("/sensitive-action")
+        async def sensitive_action(user: User = Depends(get_current_verified_user)):
+            # Apenas usuários verificados podem executar esta ação
+    """
+    if not current_user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email não verificado. Verifique seu email para continuar.",
+        )
+    
+    return current_user
+
+
+# ==================== AUTORIZAÇÃO ====================
+
+async def get_current_admin_user(
+    current_user: User = Depends(get_current_active_user),
+) -> User:
+    """
+    Dependência para garantir que o usuário é administrador.
+    
+    Args:
+        current_user: Usuário ativo
+        
+    Returns:
+        User: Usuário administrador
+        
+    Raises:
+        HTTPException: Se usuário não é admin
+        
+    Usage:
+        @app.delete("/users/{user_id}")
+        async def delete_user(
+            user_id: UUID,
+            admin: User = Depends(get_current_admin_user)
+        ):
+            # Apenas admins podem executar
+    """
+    from app.api.v1.schemas.user import UserRole
+    
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acesso negado. Permissão de administrador necessária.",
+        )
+    
+    return current_user
+
+
+async def get_current_moderator_or_admin(
+    current_user: User = Depends(get_current_active_user),
+) -> User:
+    """
+    Dependência para garantir que o usuário é moderador ou administrador.
+    
+    Args:
+        current_user: Usuário ativo
+        
+    Returns:
+        User: Usuário moderador ou admin
+        
+    Raises:
+        HTTPException: Se usuário não tem permissão
+    """
+    from app.api.v1.schemas.user import UserRole
+    
+    allowed_roles = [UserRole.ADMIN, UserRole.MODERATOR]
+    
+    if current_user.role not in allowed_roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acesso negado. Permissão de moderador ou administrador necessária.",
+        )
+    
+    return current_user
+
+
+# ==================== VALIDAÇÃO DE RECURSOS ====================
+
+class ResourceOwnerOrAdmin:
+    """
+    Dependência para validar se o usuário é dono do recurso ou admin.
+    
+    Usage:
+        verify_owner = ResourceOwnerOrAdmin("user_id")
+        
+        @app.patch("/posts/{post_id}")
+        async def update_post(
+            post_id: UUID,
+            db: AsyncSession = Depends(get_db),
+            current_user: User = Depends(verify_owner)
+        ):
+            # Apenas o dono do post ou admin pode atualizar
+    """
+    
+    def __init__(self, resource_id_field: str):
+        """
+        Args:
+            resource_id_field: Nome do campo que contém o ID do dono do recurso
+        """
+        self.resource_id_field = resource_id_field
+    
+    async def __call__(
+        self,
+        resource_id: str,
+        current_user: User = Depends(get_current_active_user),
+        db: AsyncSession = Depends(get_db),
+    ) -> User:
+        """
+        Valida se o usuário tem permissão no recurso.
+        
+        Args:
+            resource_id: ID do recurso
+            current_user: Usuário atual
+            db: Sessão do banco
+            
+        Returns:
+            User: Usuário autorizado
+            
+        Raises:
+            HTTPException: Se não autorizado
+        """
+        from app.api.v1.schemas.user import UserRole
+        
+        # Admin sempre tem acesso
+        if current_user.role == UserRole.ADMIN:
+            return current_user
+        
+        # Verificar se é o dono do recurso
+        # Esta lógica deve ser adaptada para cada tipo de recurso
+        if str(getattr(current_user, self.resource_id_field, None)) != resource_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Você não tem permissão para acessar este recurso.",
+            )
+        
+        return current_user
+
+
+# ==================== RATE LIMITING ====================
+
+class RateLimiter:
+    """
+    Dependência para rate limiting.
+    
+    Usage:
+        rate_limiter = RateLimiter(max_requests=10, window_seconds=60)
+        
+        @app.post("/login", dependencies=[Depends(rate_limiter)])
+        async def login():
+            # Limitado a 10 requisições por minuto
+    """
+    
+    def __init__(self, max_requests: int, window_seconds: int):
+        """
+        Args:
+            max_requests: Número máximo de requisições
+            window_seconds: Janela de tempo em segundos
+        """
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.requests: dict = {}
+    
+    async def __call__(self, request) -> None:
+        """
+        Valida o rate limit.
+        
+        Args:
+            request: Request do FastAPI
+            
+        Raises:
+            HTTPException: Se exceder o limite
+        """
+        from datetime import datetime, timedelta
+        
+        # Obter IP do cliente
+        client_ip = request.client.host
+        
+        # Limpar requisições antigas
+        now = datetime.utcnow()
+        if client_ip in self.requests:
+            self.requests[client_ip] = [
+                req_time
+                for req_time in self.requests[client_ip]
+                if now - req_time < timedelta(seconds=self.window_seconds)
+            ]
+        else:
+            self.requests[client_ip] = []
+        
+        # Verificar limite
+        if len(self.requests[client_ip]) >= self.max_requests:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Muitas requisições. Tente novamente em {self.window_seconds} segundos.",
+            )
+        
+        # Registrar requisição
+        self.requests[client_ip].append(now)
+
+
+# ==================== CACHE ====================
+
+class CacheControl:
+    """
+    Dependência para controle de cache HTTP.
+    
+    Usage:
+        cache = CacheControl(max_age=3600)
+        
+        @app.get("/public-data", dependencies=[Depends(cache)])
+        async def get_public_data():
+            # Resposta será cacheada por 1 hora
+    """
+    
+    def __init__(self, max_age: int, public: bool = True):
+        """
+        Args:
+            max_age: Tempo de cache em segundos
+            public: Se True, permite cache público
+        """
+        self.max_age = max_age
+        self.public = public
+    
+    async def __call__(self, response) -> None:
+        """
+        Adiciona headers de cache.
+        
+        Args:
+            response: Response do FastAPI
+        """
+        cache_control = f"{'public' if self.public else 'private'}, max-age={self.max_age}"
+        response.headers["Cache-Control"] = cache_control
+
+
+# ==================== PAGINAÇÃO ====================
+
+class PaginationParams:
+    """
+    Dependência para parâmetros de paginação.
+    
+    Usage:
+        @app.get("/items")
+        async def list_items(pagination: PaginationParams = Depends()):
+            # pagination.page, pagination.page_size
+    """
+    
+    def __init__(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+    ):
+        """
+        Args:
+            page: Número da página (mínimo 1)
+            page_size: Tamanho da página (1-100)
+        """
+        self.page = max(1, page)
+        self.page_size = min(100, max(1, page_size))
+    
+    @property
+    def offset(self) -> int:
+        """Calcula o offset para a query."""
+        return (self.page - 1) * self.page_size
+    
+    @property
+    def limit(self) -> int:
+        """Retorna o limite de itens."""
+        return self.page_size
+```
+
+---
+
+## 📚 **Boas Práticas e Convenções**
+
+### 5.1. Princípios Fundamentais
+
+1. **Separation of Concerns**: Cada camada tem responsabilidade única e bem definida
+2. **Dependency Injection**: Use containers para gerenciar dependências
+3. **Type Hints**: Sempre use type hints para melhor IDE support e validação
+4. **Async/Await**: Prefira operações assíncronas para melhor performance
+5. **Error Handling**: Trate erros de forma consistente e informativa
+6. **Validation**: Use Pydantic para validação de dados em todas as camadas
+7. **Security First**: Sempre pense em segurança desde o início
+8. **Documentation**: Documente código e APIs de forma clara
+
+### 5.2. Nomenclatura
+
+- **Arquivos**: snake_case (e.g., `user_service.py`)
+- **Classes**: PascalCase (e.g., `UserService`)
+- **Funções/Métodos**: snake_case (e.g., `get_user_by_id`)
+- **Constantes**: UPPER_SNAKE_CASE (e.g., `MAX_RETRIES`)
+- **Schemas**: Sufixo indicando propósito (e.g., `UserCreateRequest`, `UserResponse`)
+- **Rotas**: Plural para recursos (e.g., `/users`, `/items`)
+
+### 5.3. Estrutura de Código
+
+```python
+# Ordem de imports
+# 1. Standard library
+# 2. Third-party
+# 3. Local application
+
+# Ordem dentro do módulo:
+# 1. Constantes
+# 2. Schemas/Models
+# 3. Funções auxiliares
+# 4. Classes
+# 5. Endpoints (em routers)
+```
+
+### 5.4. Segurança
+
+- Sempre use HTTPS em produção
+- Implemente rate limiting
+- Valide e sanitize todas as entradas
+- Use JWT com expirações apropriadas
+- Hash passwords com bcrypt ou argon2
+- Implemente CORS corretamente
+- Use middleware de segurança
+- Nunca exponha informações sensíveis em logs ou respostas
+
+### 5.5. Performance
+
+- Use connection pooling para banco de dados
+- Implemente cache quando apropriado
+- Use paginação em listagens
+- Implemente lazy loading quando possível
+- Use índices apropriados no banco de dados
+- Monitore e profile aplicação regularmente
+
+### 5.6. Testes
+
+- Escreva testes para todas as camadas
+- Use pytest com fixtures
+- Implemente testes unitários, integração e E2E
+- Mantenha coverage acima de 80%
+- Use factories para dados de teste
+- Mock dependências externas
+
+---
+
+## 🔧 **Dependências Recomendadas**
+
+```toml
+# pyproject.toml
+
+[project]
+name = "fastapi-project"
+version = "1.0.0"
+requires-python = ">=3.11"
+
+dependencies = [
+    # FastAPI e servidor
+    "fastapi[all]>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    
+    # Banco de dados
+    "sqlalchemy[asyncio]>=2.0.25",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.1",
+    
+    # Validação e configuração
+    "pydantic[email]>=2.5.3",
+    "pydantic-settings>=2.1.0",
+    
+    # Segurança
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    "python-multipart>=0.0.6",
+    
+    # Cache e mensageria
+    "redis>=5.0.1",
+    "aioredis>=2.0.1",
+    
+    # Utilitários
+    "python-dotenv>=1.0.0",
+    "orjson>=3.9.12",
+    
+    # Logging e monitoramento
+    "structlog>=24.1.0",
+    "sentry-sdk[fastapi]>=1.39.2",
+    
+    # HTTP client
+    "httpx>=0.26.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.4",
+    "pytest-asyncio>=0.23.3",
+    "pytest-cov>=4.1.0",
+    "httpx>=0.26.0",
+    "black>=23.12.1",
+    "ruff>=0.1.11",
+    "mypy>=1.8.0",
+]
+```
+
+---
+
+**Esta rule deve ser seguida em todos os projetos FastAPI da organização.**

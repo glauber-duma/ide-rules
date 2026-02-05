@@ -1,0 +1,1845 @@
+---
+Rule: csharp-style-guide.mdc
+Description: Guia para padrões de código C#, inclui nomenclatura, formatação, boas práticas e desenvolvimento em .NET
+globs: ["**/*.cs"]
+rules: @csharp-project-structure
+alwaysApply: false
+tags: ["csharp", "style", "best-practices"]
+Author: Glauber Duma
+Created: 2026-01
+---
+
+# C# Style Guide - Padrões e Boas Práticas
+
+Este guia estabelece padrões consistentes para escrita de código C#, garantindo legibilidade, manutenibilidade e qualidade em todos os projetos.
+
+---
+
+## 1. 🎯 Convenções de Nomenclatura
+
+### 1.1. Namespaces
+
+```csharp
+// ✅ CORRETO - Namespaces seguem PascalCase e refletem estrutura
+namespace MinhaEmpresa.MinhasAplicacoes.MinhasBibliotecas
+{
+    // código
+}
+
+namespace Company.Product.Feature.Domain
+{
+    // Domain entities
+}
+
+namespace Company.Product.Feature.Application
+{
+    // Application services
+}
+
+// ❌ INCORRETO - Nomenclatura inadequada
+namespace minhaempresa.minhasaplicacoes  // lowercase
+namespace Minha_Empresa.Minhas_Aplicacoes  // underscore
+namespace Company.Product.Feature.domain  // mixed case
+```
+
+### 1.2. Classes e Interfaces
+
+```csharp
+// ✅ CORRETO - Padrões para classes e interfaces
+
+// Interfaces começam com "I" seguido de PascalCase
+public interface IUserService { }
+public interface ICacheService { }
+public interface IMessageBroker { }
+public interface IRepository<T> where T : class { }
+
+// Classes de implementação usam PascalCase
+public class UserService : IUserService { }
+public class CacheService : ICacheService { }
+public class MessageBroker : IMessageBroker { }
+public class Repository<T> : IRepository<T> where T : class { }
+
+// Classes auxiliares com sufixos descritivos
+public class DateTimeHelper { }
+public class StringHelper { }
+public class ValidationHelper { }
+
+// Classes base abstratas
+public abstract class EntityBase { }
+public abstract class ServiceBase { }
+public abstract class RepositoryBase<T> where T : class { }
+
+// ❌ INCORRETO - Nomenclaturas inadequadas
+public interface UserInterface { }  // Não usa prefixo "I"
+public interface IUserServiceImplementation { }  // Redundante
+public class IUserService { }  // Interface sem "I" é classe
+public class user_service { }  // snake_case
+public class userService { }  // camelCase em classe
+```
+
+### 1.3. Modelos, DTOs e Entidades
+
+```csharp
+// ✅ CORRETO - Modelos de domínio
+
+// Entidades de domínio
+public class UserEntity
+{
+    public int Id { get; set; }
+    public string FirstName { get; set; } = string.Empty;
+    public string LastName { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; }
+    public DateTime? UpdatedAt { get; set; }
+}
+
+// DTOs (Data Transfer Objects)
+public class UserRequest
+{
+    public string FirstName { get; set; } = string.Empty;
+    public string LastName { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
+}
+
+public class UserResponse
+{
+    public int Id { get; set; }
+    public string FirstName { get; set; } = string.Empty;
+    public string LastName { get; set; } = string.Empty;
+    public string FullName => $"{FirstName} {LastName}";
+    public DateTime CreatedAt { get; set; }
+}
+
+// ViewModels para UI
+public class UserViewModel
+{
+    public int Id { get; set; }
+    public string DisplayName { get; set; } = string.Empty;
+    public bool IsActive { get; set; }
+}
+
+// ❌ INCORRETO - Nomenclaturas inadequadas
+public class user_entity { }  // snake_case
+public class UserDto { }  // Prefira sufixos completos: UserRequest, UserResponse
+public class UserData { }  // Vago, prefira Entity, Request, Response
+```
+
+### 1.4. Entidades com Nullable Reference Types
+
+```csharp
+// ✅ CORRETO - Entidades com nullable appropriado
+
+// Entidade com propriedades nullable quando apropriado
+public class UserEntity
+{
+    public int Id { get; set; }  // IDs geralmente não são nullable
+    public string FirstName { get; set; } = string.Empty;  // Required
+    public string LastName { get; set; } = string.Empty;   // Required
+    public string? MiddleName { get; set; }  // Optional
+    public DateTime CreatedAt { get; set; }
+    public DateTime? UpdatedAt { get; set; }  // Pode ser null
+    public DateTime? DeletedAt { get; set; }  // Soft delete
+}
+
+// ✅ CORRETO - Validação com FluentValidation
+using FluentValidation;
+
+public class UserRequestValidator : AbstractValidator<UserRequest>
+{
+    public UserRequestValidator()
+    {
+        RuleFor(x => x.FirstName)
+            .NotEmpty()
+            .WithMessage("First name is required")
+            .MaximumLength(100)
+            .WithMessage("First name must not exceed 100 characters");
+
+        RuleFor(x => x.LastName)
+            .NotEmpty()
+            .WithMessage("Last name is required")
+            .MaximumLength(100)
+            .WithMessage("Last name must not exceed 100 characters");
+
+        RuleFor(x => x.Email)
+            .NotEmpty()
+            .WithMessage("Email is required")
+            .EmailAddress()
+            .WithMessage("Invalid email format");
+    }
+}
+
+// ❌ INCORRETO - Propriedades não seguem convenções
+public class UserEntity
+{
+    public int id { get; set; }  // camelCase
+    public string first_name { get; set; }  // snake_case
+    public string Last_Name { get; set; }  // Mixed case
+}
+```
+
+### 1.5. Métodos
+
+```csharp
+// ✅ CORRETO - Nomenclatura de métodos
+
+// Métodos públicos em PascalCase
+public async Task<UserResponse> GetUserAsync(int id) { }
+public async Task<List<UserResponse>> GetAllUsersAsync() { }
+public async Task CreateUserAsync(UserRequest request) { }
+public async Task UpdateUserAsync(int id, UserRequest request) { }
+public async Task DeleteUserAsync(int id) { }
+
+// Métodos privados em PascalCase
+private void ValidateUser(UserRequest request) { }
+private async Task<bool> UserExistsAsync(int id) { }
+private string FormatUserName(string firstName, string lastName) { }
+
+// Métodos booleanos começam com "Is", "Has", "Can", "Should"
+private bool IsValidEmail(string email) { }
+private bool HasPermission(string permission) { }
+private bool CanEdit(UserEntity user) { }
+private bool ShouldNotify(UserEntity user) { }
+
+// ❌ INCORRETO - Nomenclaturas inadequadas
+public async Task getUserAsync(int id) { }  // camelCase
+public async Task GetUser(int id) { }  // Falta "Async" suffix
+public void get_user(int id) { }  // snake_case
+private void validateUser(UserRequest request) { }  // camelCase em método privado
+```
+
+### 1.6. Campos e Propriedades
+
+```csharp
+// ✅ CORRETO - Campos e propriedades
+
+public class UserService
+{
+    // Campos privados com prefixo underscore e camelCase
+    private readonly IUserRepository _userRepository;
+    private readonly ILogger<UserService> _logger;
+    private readonly IMapper _mapper;
+
+    // Campos privados estáticos
+    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+    private static readonly int MaxRetries = 3;
+
+    // Propriedades públicas em PascalCase
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public bool IsActive { get; set; }
+
+    // Propriedades somente leitura
+    public string FullName { get; }
+    public DateTime CreatedAt { get; init; }
+
+    // Propriedades calculadas
+    public string DisplayName => $"{FirstName} {LastName}";
+    public bool IsExpired => ExpiryDate < DateTime.UtcNow;
+
+    // Constantes em PascalCase
+    public const int MaxNameLength = 100;
+    public const string DefaultCulture = "en-US";
+
+    // ❌ INCORRETO - Nomenclaturas inadequadas
+    private IUserRepository userRepository;  // Falta underscore
+    private readonly ILogger<UserService> m_logger;  // Hungarian notation
+    public string name { get; set; }  // camelCase em propriedade pública
+    private const int MAX_LENGTH = 100;  // SCREAMING_SNAKE_CASE
+}
+```
+
+---
+
+## 2. 📐 Estrutura de Classes
+
+### 2.1. Organização de Members
+
+```csharp
+// ✅ CORRETO - Estrutura organizada com regions
+
+public class UserService : IUserService, IDisposable
+{
+    #region Fields
+    private readonly IUserRepository _userRepository;
+    private readonly ILogger<UserService> _logger;
+    private readonly IMapper _mapper;
+    private readonly IValidator<UserRequest> _validator;
+    private bool _disposed = false;
+    #endregion
+
+    #region Properties
+    public string ServiceName { get; } = "UserService";
+    public int MaxRetries { get; set; } = 3;
+    #endregion
+
+    #region Constructors
+    public UserService(
+        IUserRepository userRepository,
+        ILogger<UserService> logger,
+        IMapper mapper,
+        IValidator<UserRequest> validator)
+    {
+        _userRepository = userRepository ?? throw new ArgumentNullException(nameof(userRepository));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
+        _validator = validator ?? throw new ArgumentNullException(nameof(validator));
+    }
+    #endregion
+
+    #region Public Methods
+    public async Task<UserResponse> GetUserAsync(int id)
+    {
+        _logger.LogInformation("Getting user with ID: {UserId}", id);
+
+        var user = await _userRepository.GetByIdAsync(id);
+        if (user == null)
+        {
+            throw new NotFoundException($"User with ID {id} not found");
+        }
+
+        return _mapper.Map<UserResponse>(user);
+    }
+
+    public async Task<List<UserResponse>> GetAllUsersAsync()
+    {
+        _logger.LogInformation("Getting all users");
+
+        var users = await _userRepository.GetAllAsync();
+        return _mapper.Map<List<UserResponse>>(users);
+    }
+
+    public async Task CreateUserAsync(UserRequest request)
+    {
+        _logger.LogInformation("Creating new user");
+
+        await ValidateRequestAsync(request);
+
+        var user = _mapper.Map<UserEntity>(request);
+        user.CreatedAt = DateTime.UtcNow;
+
+        await _userRepository.AddAsync(user);
+        await _userRepository.SaveChangesAsync();
+
+        _logger.LogInformation("User created with ID: {UserId}", user.Id);
+    }
+
+    public async Task UpdateUserAsync(int id, UserRequest request)
+    {
+        _logger.LogInformation("Updating user with ID: {UserId}", id);
+
+        await ValidateRequestAsync(request);
+
+        var user = await _userRepository.GetByIdAsync(id);
+        if (user == null)
+        {
+            throw new NotFoundException($"User with ID {id} not found");
+        }
+
+        _mapper.Map(request, user);
+        user.UpdatedAt = DateTime.UtcNow;
+
+        _userRepository.Update(user);
+        await _userRepository.SaveChangesAsync();
+
+        _logger.LogInformation("User updated: {UserId}", id);
+    }
+
+    public async Task DeleteUserAsync(int id)
+    {
+        _logger.LogInformation("Deleting user with ID: {UserId}", id);
+
+        var user = await _userRepository.GetByIdAsync(id);
+        if (user == null)
+        {
+            throw new NotFoundException($"User with ID {id} not found");
+        }
+
+        _userRepository.Delete(user);
+        await _userRepository.SaveChangesAsync();
+
+        _logger.LogInformation("User deleted: {UserId}", id);
+    }
+    #endregion
+
+    #region Private Methods
+    private async Task ValidateRequestAsync(UserRequest request)
+    {
+        var validationResult = await _validator.ValidateAsync(request);
+        if (!validationResult.IsValid)
+        {
+            var errors = string.Join(", ", validationResult.Errors.Select(e => e.ErrorMessage));
+            throw new ValidationException($"Validation failed: {errors}");
+        }
+    }
+
+    private bool UserExists(int id)
+    {
+        return _userRepository.Exists(id);
+    }
+    #endregion
+
+    #region IDisposable
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (!_disposed)
+        {
+            if (disposing)
+            {
+                // Dispose managed resources
+            }
+            _disposed = true;
+        }
+    }
+    #endregion
+}
+```
+
+### 2.2. Builder Pattern
+
+```csharp
+// ✅ CORRETO - Implementação do Builder Pattern
+
+// Entidade complexa
+public class EmailMessage
+{
+    public string From { get; set; } = string.Empty;
+    public string To { get; set; } = string.Empty;
+    public string Subject { get; set; } = string.Empty;
+    public string Body { get; set; } = string.Empty;
+    public List<string> Cc { get; set; } = new();
+    public List<string> Bcc { get; set; } = new();
+    public List<Attachment> Attachments { get; set; } = new();
+    public EmailPriority Priority { get; set; }
+    public bool IsHtml { get; set; }
+}
+
+// Builder para a entidade
+public class EmailMessageBuilder
+{
+    private readonly EmailMessage _message;
+
+    public EmailMessageBuilder()
+    {
+        _message = new EmailMessage();
+    }
+
+    public EmailMessageBuilder From(string from)
+    {
+        _message.From = from;
+        return this;
+    }
+
+    public EmailMessageBuilder To(string to)
+    {
+        _message.To = to;
+        return this;
+    }
+
+    public EmailMessageBuilder Subject(string subject)
+    {
+        _message.Subject = subject;
+        return this;
+    }
+
+    public EmailMessageBuilder Body(string body)
+    {
+        _message.Body = body;
+        return this;
+    }
+
+    public EmailMessageBuilder AddCc(string cc)
+    {
+        _message.Cc.Add(cc);
+        return this;
+    }
+
+    public EmailMessageBuilder AddBcc(string bcc)
+    {
+        _message.Bcc.Add(bcc);
+        return this;
+    }
+
+    public EmailMessageBuilder AddAttachment(Attachment attachment)
+    {
+        _message.Attachments.Add(attachment);
+        return this;
+    }
+
+    public EmailMessageBuilder WithPriority(EmailPriority priority)
+    {
+        _message.Priority = priority;
+        return this;
+    }
+
+    public EmailMessageBuilder AsHtml(bool isHtml = true)
+    {
+        _message.IsHtml = isHtml;
+        return this;
+    }
+
+    public EmailMessage Build()
+    {
+        // Validações antes de construir
+        if (string.IsNullOrWhiteSpace(_message.From))
+            throw new InvalidOperationException("From address is required");
+
+        if (string.IsNullOrWhiteSpace(_message.To))
+            throw new InvalidOperationException("To address is required");
+
+        if (string.IsNullOrWhiteSpace(_message.Subject))
+            throw new InvalidOperationException("Subject is required");
+
+        return _message;
+    }
+}
+
+// Uso do Builder
+var email = new EmailMessageBuilder()
+    .From("sender@example.com")
+    .To("recipient@example.com")
+    .Subject("Important Message")
+    .Body("This is the email body")
+    .AddCc("cc@example.com")
+    .WithPriority(EmailPriority.High)
+    .AsHtml()
+    .Build();
+```
+
+### 2.3. Fluent Interface
+
+```csharp
+// ✅ CORRETO - Interface fluente para configuração
+
+public class QueryBuilder<T> where T : class
+{
+    private readonly List<string> _includes = new();
+    private readonly List<string> _orderBy = new();
+    private int? _take;
+    private int? _skip;
+
+    public QueryBuilder<T> Include(string navigationProperty)
+    {
+        _includes.Add(navigationProperty);
+        return this;
+    }
+
+    public QueryBuilder<T> OrderBy(string property)
+    {
+        _orderBy.Add(property);
+        return this;
+    }
+
+    public QueryBuilder<T> Take(int count)
+    {
+        _take = count;
+        return this;
+    }
+
+    public QueryBuilder<T> Skip(int count)
+    {
+        _skip = count;
+        return this;
+    }
+
+    public IQueryable<T> Build(IQueryable<T> query)
+    {
+        foreach (var include in _includes)
+        {
+            // Apply includes
+        }
+
+        foreach (var orderBy in _orderBy)
+        {
+            // Apply ordering
+        }
+
+        if (_skip.HasValue)
+        {
+            query = query.Skip(_skip.Value);
+        }
+
+        if (_take.HasValue)
+        {
+            query = query.Take(_take.Value);
+        }
+
+        return query;
+    }
+}
+
+// Uso da interface fluente
+var query = new QueryBuilder<User>()
+    .Include("Orders")
+    .Include("Address")
+    .OrderBy("LastName")
+    .Skip(10)
+    .Take(20)
+    .Build(dbContext.Users);
+```
+
+---
+
+## 3. 🔌 Interfaces e Contratos
+
+### 3.1. Interface Principal
+
+```csharp
+// ✅ CORRETO - Interface genérica bem definida
+
+public interface IService<T> : IDisposable where T : class
+{
+    // Operações básicas CRUD
+    Task<T> GetByIdAsync(int id, CancellationToken cancellationToken = default);
+    Task<IEnumerable<T>> GetAllAsync(CancellationToken cancellationToken = default);
+    Task<T> CreateAsync(T entity, CancellationToken cancellationToken = default);
+    Task UpdateAsync(T entity, CancellationToken cancellationToken = default);
+    Task DeleteAsync(int id, CancellationToken cancellationToken = default);
+
+    // Operações de consulta
+    Task<IEnumerable<T>> FindAsync(
+        Expression<Func<T, bool>> predicate,
+        CancellationToken cancellationToken = default);
+
+    Task<T?> FirstOrDefaultAsync(
+        Expression<Func<T, bool>> predicate,
+        CancellationToken cancellationToken = default);
+
+    // Operações de paginação
+    Task<PagedResult<T>> GetPagedAsync(
+        int pageNumber,
+        int pageSize,
+        CancellationToken cancellationToken = default);
+
+    // Operações de validação
+    Task<bool> ExistsAsync(int id, CancellationToken cancellationToken = default);
+    Task<ValidationResult> ValidateAsync(T entity, CancellationToken cancellationToken = default);
+}
+
+// Interface específica para repositórios
+public interface IRepository<T> where T : class
+{
+    // Queries
+    Task<T?> GetByIdAsync(int id);
+    Task<IEnumerable<T>> GetAllAsync();
+    Task<IEnumerable<T>> FindAsync(Expression<Func<T, bool>> predicate);
+
+    // Commands
+    Task AddAsync(T entity);
+    void Update(T entity);
+    void Delete(T entity);
+
+    // Unit of Work
+    Task<int> SaveChangesAsync();
+    bool Exists(int id);
+}
+
+// Interface para Unit of Work
+public interface IUnitOfWork : IDisposable
+{
+    IUserRepository Users { get; }
+    IOrderRepository Orders { get; }
+
+    Task<int> CommitAsync();
+    Task RollbackAsync();
+}
+```
+
+### 3.2. Interface Segregation
+
+```csharp
+// ✅ CORRETO - Interfaces segregadas (ISP)
+
+// Interface base para leitura
+public interface IReadRepository<T> where T : class
+{
+    Task<T?> GetByIdAsync(int id);
+    Task<IEnumerable<T>> GetAllAsync();
+    Task<IEnumerable<T>> FindAsync(Expression<Func<T, bool>> predicate);
+}
+
+// Interface base para escrita
+public interface IWriteRepository<T> where T : class
+{
+    Task AddAsync(T entity);
+    void Update(T entity);
+    void Delete(T entity);
+    Task<int> SaveChangesAsync();
+}
+
+// Interface completa combinando leitura e escrita
+public interface IRepository<T> : IReadRepository<T>, IWriteRepository<T> 
+    where T : class
+{
+}
+
+// ❌ INCORRETO - Interface monolítica violando ISP
+public interface IBloatedRepository<T> where T : class
+{
+    // Muitos métodos não relacionados
+    Task<T?> GetByIdAsync(int id);
+    Task AddAsync(T entity);
+    Task SendEmailAsync(string email);  // ❌ Não pertence aqui
+    Task GenerateReportAsync();  // ❌ Não pertence aqui
+    Task<byte[]> ExportToPdfAsync();  // ❌ Não pertence aqui
+}
+```
+
+---
+
+## 4. 📚 Frameworks e Bibliotecas
+
+### 4.1. Entity Framework Core
+
+```csharp
+// ✅ CORRETO - Padrão Repository com Unit of Work
+
+// DbContext
+public class ApplicationDbContext : DbContext
+{
+    public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
+        : base(options)
+    {
+    }
+
+    public DbSet<UserEntity> Users { get; set; } = null!;
+    public DbSet<OrderEntity> Orders { get; set; } = null!;
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        base.OnModelCreating(modelBuilder);
+
+        // Configurações de entidades
+        modelBuilder.ApplyConfigurationsFromAssembly(typeof(ApplicationDbContext).Assembly);
+    }
+}
+
+// Configuração de entidade
+public class UserEntityConfiguration : IEntityTypeConfiguration<UserEntity>
+{
+    public void Configure(EntityTypeBuilder<UserEntity> builder)
+    {
+        builder.ToTable("Users");
+
+        builder.HasKey(e => e.Id);
+
+        builder.Property(e => e.FirstName)
+            .IsRequired()
+            .HasMaxLength(100);
+
+        builder.Property(e => e.LastName)
+            .IsRequired()
+            .HasMaxLength(100);
+
+        builder.Property(e => e.Email)
+            .IsRequired()
+            .HasMaxLength(255);
+
+        builder.HasIndex(e => e.Email)
+            .IsUnique();
+
+        builder.Property(e => e.CreatedAt)
+            .IsRequired();
+    }
+}
+
+// Repository genérico
+public class Repository<T> : IRepository<T> where T : class
+{
+    protected readonly ApplicationDbContext _context;
+    protected readonly DbSet<T> _dbSet;
+
+    public Repository(ApplicationDbContext context)
+    {
+        _context = context;
+        _dbSet = context.Set<T>();
+    }
+
+    public virtual async Task<T?> GetByIdAsync(int id)
+    {
+        return await _dbSet.FindAsync(id);
+    }
+
+    public virtual async Task<IEnumerable<T>> GetAllAsync()
+    {
+        return await _dbSet.ToListAsync();
+    }
+
+    public virtual async Task<IEnumerable<T>> FindAsync(Expression<Func<T, bool>> predicate)
+    {
+        return await _dbSet.Where(predicate).ToListAsync();
+    }
+
+    public virtual async Task AddAsync(T entity)
+    {
+        await _dbSet.AddAsync(entity);
+    }
+
+    public virtual void Update(T entity)
+    {
+        _dbSet.Update(entity);
+    }
+
+    public virtual void Delete(T entity)
+    {
+        _dbSet.Remove(entity);
+    }
+
+    public virtual async Task<int> SaveChangesAsync()
+    {
+        return await _context.SaveChangesAsync();
+    }
+
+    public virtual bool Exists(int id)
+    {
+        return _dbSet.Find(id) != null;
+    }
+}
+
+// Repository específico
+public class UserRepository : Repository<UserEntity>, IUserRepository
+{
+    public UserRepository(ApplicationDbContext context) : base(context)
+    {
+    }
+
+    public async Task<UserEntity?> GetByEmailAsync(string email)
+    {
+        return await _dbSet.FirstOrDefaultAsync(u => u.Email == email);
+    }
+
+    public async Task<IEnumerable<UserEntity>> GetActiveUsersAsync()
+    {
+        return await _dbSet
+            .Where(u => u.IsActive)
+            .OrderBy(u => u.LastName)
+            .ToListAsync();
+    }
+}
+
+// Unit of Work
+public class UnitOfWork : IUnitOfWork
+{
+    private readonly ApplicationDbContext _context;
+    private IUserRepository? _userRepository;
+    private IOrderRepository? _orderRepository;
+
+    public UnitOfWork(ApplicationDbContext context)
+    {
+        _context = context;
+    }
+
+    public IUserRepository Users => 
+        _userRepository ??= new UserRepository(_context);
+
+    public IOrderRepository Orders => 
+        _orderRepository ??= new OrderRepository(_context);
+
+    public async Task<int> CommitAsync()
+    {
+        return await _context.SaveChangesAsync();
+    }
+
+    public async Task RollbackAsync()
+    {
+        await Task.Run(() =>
+        {
+            foreach (var entry in _context.ChangeTracker.Entries())
+            {
+                entry.State = EntityState.Detached;
+            }
+        });
+    }
+
+    public void Dispose()
+    {
+        _context.Dispose();
+    }
+}
+```
+
+### 4.2. Dapper (Console Applications)
+
+```csharp
+// ✅ CORRETO - Uso do Dapper para aplicações console
+
+public class DapperUserRepository : IUserRepository
+{
+    private readonly string _connectionString;
+
+    public DapperUserRepository(IConfiguration configuration)
+    {
+        _connectionString = configuration.GetConnectionString("DefaultConnection") 
+            ?? throw new InvalidOperationException("Connection string not found");
+    }
+
+    public async Task<UserEntity?> GetByIdAsync(int id)
+    {
+        using var connection = new SqlConnection(_connectionString);
+        
+        const string sql = @"
+            SELECT Id, FirstName, LastName, Email, CreatedAt, UpdatedAt
+            FROM Users
+            WHERE Id = @Id";
+
+        return await connection.QueryFirstOrDefaultAsync<UserEntity>(sql, new { Id = id });
+    }
+
+    public async Task<IEnumerable<UserEntity>> GetAllAsync()
+    {
+        using var connection = new SqlConnection(_connectionString);
+        
+        const string sql = @"
+            SELECT Id, FirstName, LastName, Email, CreatedAt, UpdatedAt
+            FROM Users
+            ORDER BY LastName, FirstName";
+
+        return await connection.QueryAsync<UserEntity>(sql);
+    }
+
+    public async Task<int> AddAsync(UserEntity user)
+    {
+        using var connection = new SqlConnection(_connectionString);
+        
+        const string sql = @"
+            INSERT INTO Users (FirstName, LastName, Email, CreatedAt)
+            VALUES (@FirstName, @LastName, @Email, @CreatedAt);
+            SELECT CAST(SCOPE_IDENTITY() as int)";
+
+        return await connection.ExecuteScalarAsync<int>(sql, user);
+    }
+
+    public async Task UpdateAsync(UserEntity user)
+    {
+        using var connection = new SqlConnection(_connectionString);
+        
+        const string sql = @"
+            UPDATE Users
+            SET FirstName = @FirstName,
+                LastName = @LastName,
+                Email = @Email,
+                UpdatedAt = @UpdatedAt
+            WHERE Id = @Id";
+
+        await connection.ExecuteAsync(sql, user);
+    }
+
+    public async Task DeleteAsync(int id)
+    {
+        using var connection = new SqlConnection(_connectionString);
+        
+        const string sql = "DELETE FROM Users WHERE Id = @Id";
+
+        await connection.ExecuteAsync(sql, new { Id = id });
+    }
+
+    public async Task<IEnumerable<UserEntity>> GetUsersByNameAsync(string name)
+    {
+        using var connection = new SqlConnection(_connectionString);
+        
+        const string sql = @"
+            SELECT Id, FirstName, LastName, Email, CreatedAt, UpdatedAt
+            FROM Users
+            WHERE FirstName LIKE @Name OR LastName LIKE @Name";
+
+        return await connection.QueryAsync<UserEntity>(sql, new { Name = $"%{name}%" });
+    }
+}
+```
+
+### 4.3. Serilog e Prometheus
+
+```csharp
+// ✅ CORRETO - Configuração de Serilog
+
+// Program.cs ou Startup.cs
+using Serilog;
+using Serilog.Events;
+
+public class Program
+{
+    public static int Main(string[] args)
+    {
+        // Configurar Serilog
+        Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Information()
+            .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+            .MinimumLevel.Override("System", LogEventLevel.Warning)
+            .Enrich.FromLogContext()
+            .Enrich.WithMachineName()
+            .Enrich.WithThreadId()
+            .WriteTo.Console(
+                outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj} {Properties:j}{NewLine}{Exception}")
+            .WriteTo.File(
+                path: "logs/log-.txt",
+                rollingInterval: RollingInterval.Day,
+                outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
+            .WriteTo.Seq("http://localhost:5341")  // Se usar Seq
+            .CreateLogger();
+
+        try
+        {
+            Log.Information("Starting application");
+            CreateHostBuilder(args).Build().Run();
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Log.Fatal(ex, "Application terminated unexpectedly");
+            return 1;
+        }
+        finally
+        {
+            Log.CloseAndFlush();
+        }
+    }
+
+    public static IHostBuilder CreateHostBuilder(string[] args) =>
+        Host.CreateDefaultBuilder(args)
+            .UseSerilog()
+            .ConfigureWebHostDefaults(webBuilder =>
+            {
+                webBuilder.UseStartup<Startup>();
+            });
+}
+
+// Uso de logging estruturado
+public class UserService : IUserService
+{
+    private readonly ILogger<UserService> _logger;
+
+    public UserService(ILogger<UserService> logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task<UserResponse> GetUserAsync(int id)
+    {
+        // Logging estruturado com propriedades
+        _logger.LogInformation(
+            "Getting user {UserId} at {Timestamp}",
+            id,
+            DateTime.UtcNow);
+
+        try
+        {
+            var user = await _userRepository.GetByIdAsync(id);
+            
+            if (user == null)
+            {
+                _logger.LogWarning("User {UserId} not found", id);
+                throw new NotFoundException($"User {id} not found");
+            }
+
+            _logger.LogDebug(
+                "User retrieved successfully: {@User}",
+                user);  // @ para serializar objeto
+
+            return _mapper.Map<UserResponse>(user);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Error getting user {UserId}",
+                id);
+            throw;
+        }
+    }
+}
+
+// ✅ CORRETO - Integração com Prometheus
+
+// Startup.cs ou Program.cs
+using Prometheus;
+
+public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+{
+    // Métricas HTTP
+    app.UseHttpMetrics();
+
+    app.UseRouting();
+    app.UseAuthorization();
+
+    app.UseEndpoints(endpoints =>
+    {
+        endpoints.MapControllers();
+        
+        // Endpoint de métricas
+        endpoints.MapMetrics();
+    });
+}
+
+// Uso de métricas customizadas
+public class UserService : IUserService
+{
+    private static readonly Counter UserCreatedCounter = Metrics
+        .CreateCounter("users_created_total", "Total number of users created");
+
+    private static readonly Histogram UserCreationDuration = Metrics
+        .CreateHistogram("user_creation_duration_seconds", "User creation duration");
+
+    private static readonly Gauge ActiveUsersGauge = Metrics
+        .CreateGauge("active_users_count", "Number of active users");
+
+    public async Task CreateUserAsync(UserRequest request)
+    {
+        using (UserCreationDuration.NewTimer())
+        {
+            // Lógica de criação
+            await _userRepository.AddAsync(user);
+            await _userRepository.SaveChangesAsync();
+
+            // Incrementa contador
+            UserCreatedCounter.Inc();
+
+            // Atualiza gauge
+            var activeCount = await _userRepository.CountActiveUsersAsync();
+            ActiveUsersGauge.Set(activeCount);
+        }
+    }
+}
+```
+
+### 4.4. FluentValidation
+
+```csharp
+// ✅ CORRETO - Validação com FluentValidation
+
+// Validador para UserRequest
+public class UserRequestValidator : AbstractValidator<UserRequest>
+{
+    public UserRequestValidator()
+    {
+        RuleFor(x => x.FirstName)
+            .NotEmpty()
+            .WithMessage("First name is required")
+            .MaximumLength(100)
+            .WithMessage("First name must not exceed 100 characters")
+            .Matches(@"^[a-zA-Z\s]+$")
+            .WithMessage("First name must contain only letters");
+
+        RuleFor(x => x.LastName)
+            .NotEmpty()
+            .WithMessage("Last name is required")
+            .MaximumLength(100)
+            .WithMessage("Last name must not exceed 100 characters");
+
+        RuleFor(x => x.Email)
+            .NotEmpty()
+            .WithMessage("Email is required")
+            .EmailAddress()
+            .WithMessage("Invalid email format")
+            .Must(BeUniqueEmail)
+            .WithMessage("Email already exists");
+
+        RuleFor(x => x.DateOfBirth)
+            .NotEmpty()
+            .WithMessage("Date of birth is required")
+            .Must(BeAtLeast18YearsOld)
+            .WithMessage("User must be at least 18 years old");
+    }
+
+    private bool BeUniqueEmail(string email)
+    {
+        // Verificar no banco se email já existe
+        // Esta é uma simplificação - idealmente injetar repositório
+        return true;
+    }
+
+    private bool BeAtLeast18YearsOld(DateTime dateOfBirth)
+    {
+        var age = DateTime.Today.Year - dateOfBirth.Year;
+        if (dateOfBirth.Date > DateTime.Today.AddYears(-age))
+            age--;
+
+        return age >= 18;
+    }
+}
+
+// Validador com regras complexas
+public class OrderRequestValidator : AbstractValidator<OrderRequest>
+{
+    public OrderRequestValidator()
+    {
+        RuleFor(x => x.CustomerId)
+            .GreaterThan(0)
+            .WithMessage("Customer ID must be greater than 0");
+
+        RuleFor(x => x.Items)
+            .NotEmpty()
+            .WithMessage("Order must have at least one item");
+
+        RuleForEach(x => x.Items)
+            .SetValidator(new OrderItemValidator());
+
+        RuleFor(x => x.TotalAmount)
+            .GreaterThan(0)
+            .WithMessage("Total amount must be greater than 0")
+            .Must((order, total) => total == order.Items.Sum(i => i.Quantity * i.UnitPrice))
+            .WithMessage("Total amount does not match sum of items");
+    }
+}
+
+public class OrderItemValidator : AbstractValidator<OrderItem>
+{
+    public OrderItemValidator()
+    {
+        RuleFor(x => x.ProductId)
+            .GreaterThan(0);
+
+        RuleFor(x => x.Quantity)
+            .GreaterThan(0)
+            .WithMessage("Quantity must be greater than 0")
+            .LessThanOrEqualTo(100)
+            .WithMessage("Quantity cannot exceed 100");
+
+        RuleFor(x => x.UnitPrice)
+            .GreaterThan(0)
+            .WithMessage("Unit price must be greater than 0");
+    }
+}
+
+// Registro no DI
+public static class ServiceCollectionExtensions
+{
+    public static IServiceCollection AddValidators(this IServiceCollection services)
+    {
+        services.AddValidatorsFromAssemblyContaining<UserRequestValidator>();
+        return services;
+    }
+}
+
+// Uso em um service
+public class UserService : IUserService
+{
+    private readonly IValidator<UserRequest> _validator;
+
+    public UserService(IValidator<UserRequest> validator)
+    {
+        _validator = validator;
+    }
+
+    public async Task CreateUserAsync(UserRequest request)
+    {
+        // Validar
+        var validationResult = await _validator.ValidateAsync(request);
+
+        if (!validationResult.IsValid)
+        {
+            var errors = validationResult.Errors
+                .Select(e => new ValidationError(e.PropertyName, e.ErrorMessage))
+                .ToList();
+
+            throw new ValidationException("Validation failed", errors);
+        }
+
+        // Continuar com a lógica
+    }
+}
+```
+
+### 4.5. Injeção de Dependência
+
+```csharp
+// ✅ CORRETO - Extensões para configuração de DI
+
+// ServiceCollectionExtensions.cs
+public static class ServiceCollectionExtensions
+{
+    public static IServiceCollection AddApplicationServices(this IServiceCollection services)
+    {
+        // Services
+        services.AddScoped<IUserService, UserService>();
+        services.AddScoped<IOrderService, OrderService>();
+        services.AddScoped<IEmailService, EmailService>();
+
+        return services;
+    }
+
+    public static IServiceCollection AddRepositories(this IServiceCollection services)
+    {
+        // Repositories
+        services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<IOrderRepository, OrderRepository>();
+        services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
+
+        // Unit of Work
+        services.AddScoped<IUnitOfWork, UnitOfWork>();
+
+        return services;
+    }
+
+    public static IServiceCollection AddDatabase(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddDbContext<ApplicationDbContext>(options =>
+        {
+            options.UseSqlServer(
+                configuration.GetConnectionString("DefaultConnection"),
+                sqlOptions =>
+                {
+                    sqlOptions.EnableRetryOnFailure(
+                        maxRetryCount: 3,
+                        maxRetryDelay: TimeSpan.FromSeconds(30),
+                        errorNumbersToAdd: null);
+                });
+
+            // Apenas em desenvolvimento
+            if (Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") == "Development")
+            {
+                options.EnableSensitiveDataLogging();
+                options.EnableDetailedErrors();
+            }
+        });
+
+        return services;
+    }
+
+    public static IServiceCollection AddCaching(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        // Memory Cache
+        services.AddMemoryCache();
+
+        // Distributed Cache (Redis)
+        services.AddStackExchangeRedisCache(options =>
+        {
+            options.Configuration = configuration.GetConnectionString("Redis");
+            options.InstanceName = "MyApp_";
+        });
+
+        services.AddScoped<ICacheService, CacheService>();
+
+        return services;
+    }
+
+    public static IServiceCollection AddMessaging(this IServiceCollection services)
+    {
+        services.AddScoped<IMessageBroker, RabbitMqBroker>();
+        services.AddScoped<IEventPublisher, EventPublisher>();
+        services.AddScoped<IEventHandler, EventHandler>();
+
+        return services;
+    }
+
+    public static IServiceCollection AddAutoMapperProfiles(this IServiceCollection services)
+    {
+        services.AddAutoMapper(typeof(UserProfile), typeof(OrderProfile));
+        return services;
+    }
+
+    public static IServiceCollection AddValidators(this IServiceCollection services)
+    {
+        services.AddValidatorsFromAssemblyContaining<UserRequestValidator>();
+        return services;
+    }
+}
+
+// Uso no Program.cs ou Startup.cs
+public class Startup
+{
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddControllers();
+
+        // Configurações customizadas
+        services.AddDatabase(Configuration);
+        services.AddRepositories();
+        services.AddApplicationServices();
+        services.AddCaching(Configuration);
+        services.AddMessaging();
+        services.AddAutoMapperProfiles();
+        services.AddValidators();
+
+        services.AddSwaggerGen();
+    }
+}
+
+// ✅ CORRETO - Lifetimes apropriados
+public static class ServiceCollectionExtensions
+{
+    public static IServiceCollection AddServices(this IServiceCollection services)
+    {
+        // Transient: nova instância a cada requisição
+        services.AddTransient<IEmailSender, SmtpEmailSender>();
+        services.AddTransient<IDateTimeProvider, DateTimeProvider>();
+
+        // Scoped: uma instância por request HTTP
+        services.AddScoped<IUserService, UserService>();
+        services.AddScoped<IUnitOfWork, UnitOfWork>();
+
+        // Singleton: uma única instância durante toda aplicação
+        services.AddSingleton<IConfiguration>(Configuration);
+        services.AddSingleton<IHttpContextAccessor, HttpContextAccessor>();
+
+        return services;
+    }
+}
+```
+
+---
+
+## 5. ✅ Boas Práticas
+
+### 5.1. DO's - Práticas Recomendadas
+
+#### ✅ Use injeção de dependência
+
+```csharp
+// ✅ CORRETO - DI com interfaces
+public class UserService : IUserService
+{
+    private readonly IUserRepository _userRepository;
+    private readonly ILogger<UserService> _logger;
+    private readonly IMapper _mapper;
+
+    public UserService(
+        IUserRepository userRepository,
+        ILogger<UserService> logger,
+        IMapper mapper)
+    {
+        _userRepository = userRepository ?? throw new ArgumentNullException(nameof(userRepository));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
+    }
+}
+
+// ❌ INCORRETO - Dependências hardcoded
+public class UserService
+{
+    private readonly UserRepository _userRepository = new UserRepository();  // ❌
+    private readonly Logger _logger = new Logger();  // ❌
+}
+```
+
+#### ✅ Use async/await para operações assíncronas
+
+```csharp
+// ✅ CORRETO - Operações assíncronas
+public async Task<UserResponse> GetUserAsync(int id)
+{
+    var user = await _userRepository.GetByIdAsync(id);
+    return _mapper.Map<UserResponse>(user);
+}
+
+public async Task<List<UserResponse>> GetAllUsersAsync()
+{
+    var users = await _userRepository.GetAllAsync();
+    return _mapper.Map<List<UserResponse>>(users);
+}
+
+// ✅ CORRETO - ConfigureAwait(false) em bibliotecas
+public async Task<User> GetUserAsync(int id)
+{
+    var user = await _userRepository
+        .GetByIdAsync(id)
+        .ConfigureAwait(false);  // Não captura contexto
+    
+    return user;
+}
+
+// ❌ INCORRETO - Operações síncronas bloqueantes
+public UserResponse GetUser(int id)
+{
+    var user = _userRepository.GetByIdAsync(id).Result;  // ❌ Deadlock!
+    return _mapper.Map<UserResponse>(user);
+}
+
+public List<UserResponse> GetAllUsers()
+{
+    var users = _userRepository.GetAllAsync().GetAwaiter().GetResult();  // ❌
+    return _mapper.Map<List<UserResponse>>(users);
+}
+```
+
+#### ✅ Use logging estruturado
+
+```csharp
+// ✅ CORRETO - Logging estruturado com Serilog
+public class UserService
+{
+    private readonly ILogger<UserService> _logger;
+
+    public async Task CreateUserAsync(UserRequest request)
+    {
+        _logger.LogInformation(
+            "Creating user {Email} at {Timestamp}",
+            request.Email,
+            DateTime.UtcNow);
+
+        try
+        {
+            // lógica
+            _logger.LogInformation("User created successfully: {UserId}", user.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to create user {Email}",
+                request.Email);
+            throw;
+        }
+    }
+}
+
+// ❌ INCORRETO - String concatenation no log
+_logger.LogInformation("Creating user " + request.Email);  // ❌
+_logger.LogError("Failed to create user " + request.Email + ": " + ex.Message);  // ❌
+```
+
+#### ✅ Implemente tratamento de erros consistente
+
+```csharp
+// ✅ CORRETO - Exceções customizadas
+public class NotFoundException : Exception
+{
+    public NotFoundException(string message) : base(message) { }
+}
+
+public class ValidationException : Exception
+{
+    public List<ValidationError> Errors { get; }
+
+    public ValidationException(string message, List<ValidationError> errors)
+        : base(message)
+    {
+        Errors = errors;
+    }
+}
+
+// ✅ CORRETO - Global exception handler
+public class GlobalExceptionHandlerMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly ILogger<GlobalExceptionHandlerMiddleware> _logger;
+
+    public GlobalExceptionHandlerMiddleware(
+        RequestDelegate next,
+        ILogger<GlobalExceptionHandlerMiddleware> logger)
+    {
+        _next = next;
+        _logger = logger;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        try
+        {
+            await _next(context);
+        }
+        catch (NotFoundException ex)
+        {
+            _logger.LogWarning(ex, "Resource not found");
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                error = "Not Found",
+                message = ex.Message
+            });
+        }
+        catch (ValidationException ex)
+        {
+            _logger.LogWarning(ex, "Validation error");
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                error = "Validation Failed",
+                errors = ex.Errors
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unhandled exception");
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                error = "Internal Server Error",
+                message = "An unexpected error occurred"
+            });
+        }
+    }
+}
+```
+
+#### ✅ Use padrões de design apropriados
+
+```csharp
+// ✅ CORRETO - Factory Pattern
+public interface IServiceFactory
+{
+    IPaymentService CreatePaymentService(PaymentMethod method);
+}
+
+public class ServiceFactory : IServiceFactory
+{
+    private readonly IServiceProvider _serviceProvider;
+
+    public ServiceFactory(IServiceProvider serviceProvider)
+    {
+        _serviceProvider = serviceProvider;
+    }
+
+    public IPaymentService CreatePaymentService(PaymentMethod method)
+    {
+        return method switch
+        {
+            PaymentMethod.CreditCard => _serviceProvider.GetRequiredService<CreditCardPaymentService>(),
+            PaymentMethod.PayPal => _serviceProvider.GetRequiredService<PayPalPaymentService>(),
+            PaymentMethod.BankTransfer => _serviceProvider.GetRequiredService<BankTransferPaymentService>(),
+            _ => throw new ArgumentException($"Unknown payment method: {method}")
+        };
+    }
+}
+
+// ✅ CORRETO - Strategy Pattern
+public interface INotificationStrategy
+{
+    Task SendAsync(string recipient, string message);
+}
+
+public class EmailNotificationStrategy : INotificationStrategy
+{
+    public async Task SendAsync(string recipient, string message)
+    {
+        // Email implementation
+    }
+}
+
+public class SmsNotificationStrategy : INotificationStrategy
+{
+    public async Task SendAsync(string recipient, string message)
+    {
+        // SMS implementation
+    }
+}
+
+public class NotificationService
+{
+    private readonly INotificationStrategy _strategy;
+
+    public NotificationService(INotificationStrategy strategy)
+    {
+        _strategy = strategy;
+    }
+
+    public async Task NotifyAsync(string recipient, string message)
+    {
+        await _strategy.SendAsync(recipient, message);
+    }
+}
+```
+
+### 5.2. DON'Ts - Práticas a Evitar
+
+#### ❌ Não use variáveis globais ou estáticas para estado
+
+```csharp
+// ❌ INCORRETO - Estado estático global
+public static class GlobalState
+{
+    public static User CurrentUser { get; set; }  // ❌ Perigoso!
+    public static List<Order> Orders = new();  // ❌ Não thread-safe!
+}
+
+// ✅ CORRETO - Use DI e contexto apropriado
+public class UserContext
+{
+    private readonly IHttpContextAccessor _httpContextAccessor;
+
+    public UserContext(IHttpContextAccessor httpContextAccessor)
+    {
+        _httpContextAccessor = httpContextAccessor;
+    }
+
+    public User GetCurrentUser()
+    {
+        var userId = _httpContextAccessor.HttpContext?.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        // Buscar usuário do banco ou cache
+        return user;
+    }
+}
+```
+
+#### ❌ Não ignore exceções
+
+```csharp
+// ❌ INCORRETO - Ignorar exceções silenciosamente
+try
+{
+    await _userRepository.AddAsync(user);
+}
+catch
+{
+    // ❌ Ignora erro silenciosamente!
+}
+
+// ✅ CORRETO - Trate ou propague exceções
+try
+{
+    await _userRepository.AddAsync(user);
+}
+catch (DbUpdateException ex)
+{
+    _logger.LogError(ex, "Failed to add user {Email}", user.Email);
+    throw new DatabaseException("Failed to create user", ex);
+}
+```
+
+#### ❌ Não faça consultas diretas ao banco
+
+```csharp
+// ❌ INCORRETO - SQL direto no service/controller
+public class UserService
+{
+    private readonly string _connectionString;
+
+    public User GetUser(int id)
+    {
+        using var connection = new SqlConnection(_connectionString);
+        var sql = $"SELECT * FROM Users WHERE Id = {id}";  // ❌ SQL Injection!
+        // ...
+    }
+}
+
+// ✅ CORRETO - Use repositórios
+public class UserService
+{
+    private readonly IUserRepository _userRepository;
+
+    public async Task<User> GetUserAsync(int id)
+    {
+        return await _userRepository.GetByIdAsync(id);
+    }
+}
+```
+
+#### ❌ Não misture lógica de negócios com apresentação
+
+```csharp
+// ❌ INCORRETO - Lógica de negócio no controller
+[ApiController]
+[Route("api/[controller]")]
+public class UsersController : ControllerBase
+{
+    private readonly ApplicationDbContext _context;
+
+    [HttpPost]
+    public async Task<IActionResult> Create(UserRequest request)
+    {
+        // ❌ Validação no controller
+        if (string.IsNullOrEmpty(request.Email))
+            return BadRequest("Email is required");
+
+        // ❌ Lógica de negócio no controller
+        var user = new User
+        {
+            Email = request.Email,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        // ❌ Acesso direto ao DbContext
+        _context.Users.Add(user);
+        await _context.SaveChangesAsync();
+
+        return Ok(user);
+    }
+}
+
+// ✅ CORRETO - Controller fino, lógica no service
+[ApiController]
+[Route("api/[controller]")]
+public class UsersController : ControllerBase
+{
+    private readonly IUserService _userService;
+
+    public UsersController(IUserService userService)
+    {
+        _userService = userService;
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> Create(UserRequest request)
+    {
+        var response = await _userService.CreateUserAsync(request);
+        return CreatedAtAction(nameof(GetById), new { id = response.Id }, response);
+    }
+}
+```
+
+---
+
+## 6. 📋 Style Guide Checklist
+
+### Nomenclatura
+- [ ] Namespaces em PascalCase refletem estrutura do projeto
+- [ ] Interfaces começam com "I" seguido de PascalCase
+- [ ] Classes usam PascalCase sem prefixos
+- [ ] Métodos públicos e privados em PascalCase
+- [ ] Campos privados com underscore + camelCase (`_field`)
+- [ ] Propriedades públicas em PascalCase
+- [ ] Constantes em PascalCase
+- [ ] Parâmetros e variáveis locais em camelCase
+
+### Estrutura
+- [ ] Members organizados em regions (Fields, Properties, Constructors, Methods)
+- [ ] Ordem: campos → propriedades → constructors → métodos públicos → métodos privados
+- [ ] Uma classe por arquivo
+- [ ] Nome do arquivo = nome da classe
+
+### Código
+- [ ] Usar `var` quando tipo é óbvio
+- [ ] Nullable reference types habilitado (`<Nullable>enable</Nullable>`)
+- [ ] Async/await para operações I/O
+- [ ] CancellationToken em métodos async públicos
+- [ ] ConfigureAwait(false) em bibliotecas
+- [ ] Dispose pattern implementado corretamente
+
+### Dependências
+- [ ] Injeção de dependência via constructor
+- [ ] Validação de argumentos null no constructor
+- [ ] Interfaces para abstrações
+- [ ] Lifetime apropriado (Transient/Scoped/Singleton)
+
+### Persistência
+- [ ] Padrão Repository implementado
+- [ ] Unit of Work para transações
+- [ ] Entity Framework Core para web/desktop
+- [ ] Dapper para console apps
+- [ ] Migrations para mudanças de schema
+
+### Validação
+- [ ] FluentValidation para regras de negócio
+- [ ] Data Annotations para validações simples
+- [ ] Validação antes de persistir dados
+
+### Logging
+- [ ] Serilog configurado
+- [ ] Logging estruturado com propriedades
+- [ ] Níveis apropriados (Debug, Info, Warning, Error, Fatal)
+- [ ] Não logar dados sensíveis
+
+### Exceções
+- [ ] Exceções customizadas para domínio
+- [ ] Global exception handler configurado
+- [ ] Logs de erro antes de throw
+- [ ] Não capturar Exception genérico sem re-throw
+
+### Testes
+- [ ] Testes unitários para lógica de negócio
+- [ ] Testes de integração para repositórios
+- [ ] Mocks para dependências externas
+- [ ] Cobertura mínima de 80%
+
+---
+
+**Última atualização**: Janeiro 2026  
+**Versão do documento**: 1.0.0  
+**Autor**: Glauber Duma
