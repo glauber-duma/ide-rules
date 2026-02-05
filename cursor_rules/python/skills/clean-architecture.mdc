@@ -1,0 +1,266 @@
+# Skill: Clean Architecture Implementation
+
+## Overview
+
+This skill focuses on implementing the principles of Clean Architecture in Python projects. Clean Architecture emphasizes the separation of concerns, making the codebase more maintainable, testable, and scalable.
+
+## Layer Structure
+
+```
+src/
+├── domain/.             # 🧠 INNERMOST - Pure Business Logic
+│   ├── entities/.       # Core business entities
+│   ├── value_objects/.  # Domain-specific value objects
+│   └── exceptions/.     # Domain-specific exceptions
+|
+|── application/.        # 🏗️ Use cases and ports
+│   ├── use_cases/.      # business logic orchestration
+│   └── ports/.          # Interfaces (abstract classes) for repositories and services
+|
+├── infrastructure/.     # 🛠️ Technical details and implementations
+│   ├── persistence/.    # Database implementations (repositories)
+│   ├── dapr/.           # Dapr clients
+│   └── cache/.          # Caching implementations
+|
+└── api/.                # 🌐 OUTERMOST Presentation
+    ├── routes/.         # API route definitions (FastAPI endpoints)
+    └── schemas/.        # Data validation and serialization (Pydantic models)
+```
+
+## Dependency Rule
+
+** Dependencies always point inwards: **
+
+```
+api -> application -> domain
+infrastructure -> application -> domain
+```
+
+### ✅ Correct Dependency Example
+
+```python
+# Use Case (application) depends on repository interface (application/ports)
+# application/use_cases/create_user.py
+class CreateUserUseCase:
+    def __init__(self, user_repository: UserRepository):
+        self.user_repository = user_repository
+
+    def execute(self, user_data: dict):
+        user = User(**user_data)
+        self.user_repository.save(user)
+
+# Repository Implementation (infrastructure) implements interface (application/ports)
+# infrastructure/persistence/user_repository.py
+class UserRepositoryImpl(UserRepository):
+    def __init__(self, db_session: AsyncSession):
+        self.db_session = db_session
+
+
+### ❌ Wrong Dependency Example
+# Domain should NEVER depend on infrastructure directly
+# ❌ WRONG! from infrastructure.persistence import UserRepositoryImpl  
+
+# Application should NEVER depend on infrastructure directly
+# ❌ WRONG! from infrastructure.persistence import UserRepositoryImpl  
+# ✅ from application.ports.user_repository import UserRepository
+
+```
+
+## Entity Pattern
+
+### Immutable Entities
+```python
+class User(BaseEntity):
+    def __init__(self, user_id: str, name: str, email: str):
+        self._user_id = user_id
+        self._name = name
+        self._email = email
+
+    @property
+    def user_id(self):
+        return self._user_id
+
+    @property
+    def name(self):
+        return self._name
+
+    @property
+    def email(self):
+        return self._email
+
+    def update_name(self, new_name: str) -> 'User':
+        """Returns a new User instance with the updated name."""
+        return User(self._user_id, new_name, self._email)    
+```
+
+### Value Objects
+```python
+class Email:
+    def __init__(self, address: str):
+        if not self._is_valid_email(address):
+            raise ValueError("Invalid email address")
+        self._address = address
+
+    @property
+    def address(self):
+        return self._address    
+```        
+
+
+## Use Case Example
+
+### One Use Case per file
+
+```python
+# ✅ Correct
+# application/use_cases/create_user.py
+class CreateUserUseCase(BaseUseCase[User]):
+    def __init__(self, user_repository: UserRepository):
+        self.user_repository = user_repository
+
+    async def execute(self, user_request: UserRequest) -> User:
+        # Implementation of user creation logic
+        pass...
+
+### ❌ Dont put multiple use cases in one file
+# application/use_cases/user_user_cases.py
+
+```
+
+### Use Case Structure
+
+```python
+from src.application.use_cases.base_use_case import BaseUseCase
+
+class CreateUserUseCase(BaseUseCase[User]):
+    def __init__(
+        self, 
+        user_repository: UserRepository,
+        event_publisher: EventPublisher
+        ):
+          super().__init__(component_name="CreateUserUseCase")
+          self.user_repository = user_repository
+          self.event_publisher = event_publisher
+
+    async def execute(self, user_request: UserRequest) -> User:
+        return await self._execute_with_login(
+            self._execute,
+            params={"name": user_request.name, "id": user_request.id},
+            correlation_id=user_request.correlation_id
+        )
+
+
+    async def _execute(self, user_request: UserRequest) -> User:
+        # 1 - Validate business rules
+        # 2 - Create User entity
+        # 3 - Save to repository
+        # 4 - Publish domain events
+        # 5 - Return result
+        pass...
+
+
+
+```
+
+## Repository Pattern
+
+### Repository Interface (Port)
+
+```python
+# application/ports/repositories/user_repository.py
+from abc import ABC, abstractmethod
+from typing import List
+from src.domain.entities.user import User
+class UserRepository(ABC):
+    @abstractmethod
+    async def save(self, user: User) -> None:
+        pass
+
+    @abstractmethod
+    async def get_by_id(self, user_id: str) -> User:
+        pass
+
+    @abstractmethod
+    async def list_all(self) -> List[User]:
+        pass
+```
+### Repository Implementation (Infrastructure)
+
+```python
+# infrastructure/persistence/repositories/user_repository_impl.py
+from src.application.ports.repositories.user_repository import UserRepository
+from src.domain.entities.user import User
+class UserRepositoryImpl(UserRepository):
+    def __init__(self, db_session: AsyncSession):
+        self.db_session = db_session
+
+    async def save(self, user: User) -> User:
+        # Implementation to save user to the database
+        self.session.add(user)
+        await self.session.commit()
+        await self.session.refresh(user)
+        return user
+
+    async def get_by_id(self, user_id: str) -> User:
+        # Implementation to get user by ID from the database
+        pass
+
+    async def list_all(self) -> List[User]:
+        # Implementation to list all users from the database
+        pass
+```
+
+## Best Practices
+
+1. **Domain has NO external dependencies**: Keep the domain layer free from any external libraries or frameworks.
+2. **One user case per file**: Each use case should be implemented in its own file for clarity and maintainability.
+3. **Use interfaces (ports)**: Application define contracts.
+4. **Implementations in infrastructure**: Concrete implementations of interfaces should reside in the infrastructure layer.
+5. **DTOs in presentation**: Pydantic schemas for api boundaries only.
+6. **Entities are immutable**: Design entities to be immutable to ensure consistency and integrity.
+7. **Value Objects for domain concepts**: email, money, address, etc.
+
+## Common Mistakes
+
+### ❌ Domain import infrastructure
+
+```python
+# Domain should NEVER know about SqlAlchemy, FastAPI or any infrastructure detail
+# ❌ WRONG! from sqlalchemy import Column  
+```
+
+### ❌ Use case create instances directly
+
+```python
+# WRONG!
+class CreateUserUseCase:
+    def __init__(self):
+        self.user_repository = UserRepositoryImpl(...)  # ❌ Tight coupling to implementation
+
+# CORRECT!
+class CreateUserUseCase:
+    def __init__(self, user_repository: UserRepository):  # ✅ Depends injected
+        self.user_repository = user_repository
+```
+
+### ❌ Business logic in routes
+
+```python
+# WRONG!
+from fastapi import APIRouter
+router = APIRouter()
+
+@router.post("/users")
+async def create_user(user_request: UserRequest):
+    # Validatiion, business rules, etc - Should be in use case
+    pass
+
+# CORRECT!
+from fastapi import APIRouter
+router = APIRouter()
+
+@router.post("/users")
+async def create_user(user_request: UserRequest, create_user_use_case: CreateUserUseCase):
+    return await create_user_use_case.execute(user_request)
+
+```

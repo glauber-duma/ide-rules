@@ -1,0 +1,237 @@
+# Skill: Dapr Integration Patterns
+
+## Overview
+
+This skill focuses on integrating Dapr (Distributed Application Runtime) into Python applications. Dapr provides a set of building blocks for microservices, enabling developers to build resilient, stateless, and stateful applications with ease.
+
+- **pub/sub**: Implementing publish/subscribe messaging patterns (RabbitMQ, Kafka, etc.).
+- **state management**: Using Dapr's state store capabilities (Redis, Azure Cosmos DB, etc.).
+- **service invocation**: Calling other services securely and reliably.
+
+## Dapr Compontnets
+
+### Configuration (dapr.yaml)
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: kafka
+  namespace: default
+spec:
+  type: pubsub.kafka
+  # Kafka pub/sub component configuration
+---
+metadata:
+   name: stattestore
+spec:
+  type: state.redis
+  # Redis state store component configuration
+---
+```
+
+## Dapr Service Client
+
+### Inicialization
+
+```python
+from src.infrastructure.dapr.dapr_client import DaprServiceClient
+
+dapr_service_client = providers.Factory(
+    DaprServiceClient,
+    dapr_http_port=config.DAPR_HTTP_PORT,
+)
+```
+
+### Service Invocation Example
+
+```python
+
+class DaprServiceClient:
+
+    def invoke_service(
+        self, 
+        app_id: str, 
+        method: str, 
+        data: dict):
+        url = f"http://localhost:{self.dapr_http_port}/v1.0/invoke/{app_id}/method/{method}"
+        # ... HTTP call        
+        
+```
+
+## Event Publisher (pub/sub)
+
+### Initialization
+
+```python
+from src.infrastructure.dapr.dapr_event_publisher import DaprEventPublisher
+
+dapr_event_publisher = providers.Factory(
+    DaprEventPublisher,
+    dapr_http_port=config.DAPR_HTTP_PORT,
+    pubsub_name="kafka",
+) -> None:
+   url = f"http://localhost:{self.dapr_http_port}/v1.0/publish/{self.pubsub_name}/{topic}"
+        # ... HTTP post with data
+```
+
+### Usage in Use Case
+
+```python
+class CreateUserUseCase(BaseUseCase[User]):
+    def __init__(
+        self, 
+        user_repository: UserRepository,
+        event_publisher: EventPublisher
+        ):
+          super().__init__(component_name="CreateUserUseCase")
+          self.user_repository = user_repository
+          self.event_publisher = event_publisher
+
+       async def execute(self, user_request: UserRequest) -> User:
+          # Implementation of user creation logic
+          user = User( ... )
+          await self.user_repository.save(user)
+          await self.event_publisher.publish(
+            topic="user_created",
+            data= {
+                "id": user.id,
+                "name": user.name,
+                "email": user.email
+            })
+          return user   
+
+```          
+
+
+## Redis Cache (State Store)
+
+### RedisCache Wrapper
+⚠️ **CRITICAL**: Always use `RedisCache` wrapper, not direct Redis Client.
+
+```python 
+from src.infrastructure.dapr.dapr_redis_cache import RedisCache
+
+redis_cache = providers.Singleton(
+    RedisCache,
+    dapr_http_port=config.DAPR_HTTP_PORT,
+    state_store_name="stattestore", # Dapr state store component name
+)
+```
+
+### Getting Connection
+
+```python
+# in rate limiter or readniess check
+redis_cache_instance = container.cache.redis_cache()
+redis_connection = await redis_cache_instance.get_connection()
+
+### Why Wrapper is required?
+
+- `ll-py-dapr-cache`is a decortator, not a direct Redis client.
+- Wrapper provides proper async Redis client interface.
+- Handlers Dapr state store abstraction.
+
+
+## Service Discovery
+
+### Pattern
+
+```python
+# Use DaprServiceClient for service invocation
+service_discovery = providers.Factory(
+    DaprServiceClient,
+    dapr_http_port=config.DAPR_HTTP_PORT,
+)
+
+# In service implementation
+
+class SomeServiceImpl:
+    def __init__(self, service_discovery: DaprServiceClient):
+        self.service_discovery = service_discovery
+
+    async def call_other_service(self, data: dict) -> dict:
+        response = await self.service_discovery.invoke_service(
+            app_id="other-service",
+            method="process_data",
+            data=data
+        )
+        return response
+
+```
+
+## Runing with Dapr
+
+### Local Development
+
+```bash
+# Start Dapr sidecar with your application
+dapr run -f dapr.yaml 
+
+# or run app with Dapr
+dapr run --app-id my-python-app --app-port 8000 --dapr-http-port 3500 python main.py
+``` 
+
+### Debugging
+
+- Dapr HTTP port: 3500 (default)
+- Dapr gRPC port: 50001 (default)
+- App port: 8000 (from settings)
+
+## Best Practices
+
+1. **Always use DaprServiceClient**: Dont make direct HTTP calls for service invocation.
+2. **Use RedisCache wrapper**: Never use direct Redis client for ratting limiting.
+3. **Publish events after persistence**: Ensure data is saved before publishing events.
+4. **Handle Dapr errors gracefully**: Dapr might be unavailable is some enviroments.
+5. **Use metadata for routing**: Add metadata to events for filtering.
+
+## Common Patterns
+
+### Event Publishing Pattern
+
+```python
+# 1. Save entity to repository
+await self.user_repository.save(user)
+
+# 2. Publish domain event
+try:
+    await self.event_publisher.publish(
+        topic="user_created",
+        data=entity.to_dict()
+    )
+catch Exception as e:
+    self.logger.error(f"Failed to publish event: {e}")
+    # dont fail the request if events fails
+```
+
+### Cache Pattern
+
+```python
+# 1. Get cache instance
+redis_cache_instance = container.cache.redis_cache()
+
+# 2. Get Redis connection (async)
+redis_connection = await redis_cache_instance.get_connection()
+
+# 3. Use Redis client
+await redis_connection.set("some_key", "some_value")
+cached_value = await redis_connection.get("some_key")
+````
+
+### Troubleshooting
+
+### "Dapr sidecar not found" 
+- Ensure Dapr is running: `dapr run -f dapr.yaml`
+- Verify app and Dapr ports are correct.
+- Check Dapr HTTP port environment variable.
+
+### "State store not found"
+- Verify state store component name in Dapr configuration.
+- Ensure Dapr sidecar has access to the state store.
+- Check Dapr logs for errors.
+
+### "Pub/Sub Failed"
+- Verify pub/sub component configuration in Dapr.
+- Check topic name matches subscriptions.
+- Ensure Dapr sidecar is running and reachable.

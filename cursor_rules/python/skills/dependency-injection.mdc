@@ -1,0 +1,146 @@
+# Skill: Dependency Injection in Python with dependency-injector
+
+## Overview
+
+This skill focuses on implementing Dependency Injection (DI) in Python applications using the `dependency-injector` library
+for comprehensive dependency injection following Clean Architecture principles.
+DI is a design pattern that helps manage dependencies between components, promoting loose coupling and enhancing testability.
+
+## Key Concepts
+
+### Container Hierarchy
+```python
+ApplicationContainer (root)
+├── DatabaseContainer
+├── DapperContainer
+├── CacheContainer
+├── RepositoryContainer
+├── ServiceContainer
+└── UseCaseContainer
+```
+
+### Providers Types
+
+#### singleton
+Creates a single instance of the dependency that is shared across the application.
+```python
+async_engine = providers.Singleton(
+    create_async_engine,
+    config.DATABASE_URL,
+    echo=True,
+)
+```
+
+- Create once, shared across the app.
+- Use for expensive resources (DB connections, HTTP clients, Redis Client).
+
+#### factory
+Creates a new instance of the dependency each time it is requested.
+```python
+user_repository = providers.Factory(
+    UserRepositoryImpl,
+    db_session=database_container.db_session,
+)
+```
+- New instance on each request.
+- Use for lightweight, stateless services (repositories, use cases).
+
+#### Resource
+Manages the lifecycle of resources that need to be started and stopped.
+```python
+db_session = providers.Resource(
+    lambda factory: factory(),
+    factory=async_session_factory,
+)
+````
+- Context manager, cleaned up after use.
+- Use for resources needing setup/teardown (DB sessions, file handlers).
+
+#### Object 
+Provides a pre-existing instance.
+```python
+config = providers.Object(AppConfig())
+```
+- Passes object/class reference directly.
+- Use for static classes, utilities.
+
+## Wiring Modules
+
+### Configuration in main.py
+```python
+wired_modules = [
+    "src.application.use_cases",
+    "src.application.services",
+    "src.infrastructure.dapr",
+    "src.infrastructure.persistence",
+]
+container.wire(modules=wired_modules)
+```
+
+### using in routes
+```python
+from dependency_injector.wiring import inject, Provide
+from src.container import ApplicationContainer
+
+@router.post("/users", response_model=UserResponse)
+@inject
+async def create_user(
+    user_data: UserCreate,
+    create_user_use_case: CreateUserUseCase = Depends(
+        Provide[ApplicationContainer.use_case.create_user_use_case]
+        ),
+):
+    return await create_user_use_case.execute(user_data)
+```
+
+## Common Patterns
+
+### Passing atual instances (not providers)
+When injecting into cleanup handlers or utilities, pass actual instances:
+
+```python
+# Correct - Pass actual instance
+cleanup_handler = providers.Singleton(
+    ApplicationCleanup,
+    redis_client=redis_client_instance,
+    db_engine=database_container.async_engine,
+)
+
+#WRONG - Dont pass providers methods
+def create_container(settings: Settings) -> ApplicationContainer:
+    container = ApplicationContainer()
+    container.config.from_dict({
+        "DATABASE_URL": settings.database_url,
+        "DAPR_HTTP_PORT": settings.dapr_http_port,
+        # ... other config
+    })
+    return container
+```
+
+## Best Practices
+
+1. **Always wire modules explicitly**: Dont wire entire packages.
+2. **Use factory for use cases**: Each requests gets a fresh instance.
+3. **Singleton for expensive resources**: DB connections, HTTP clients, Redis clients.
+4. **Pass actual instances to cleanup**: Not providers or factories.
+5. **Type hints help**: Use `Provide[Container.path]` for type safety.
+
+## Troubleshooting
+
+- **Circular dependencies**: Refactor to remove cycles in container definitions.
+- **Missing wiring**: Ensure all modules using DI are wired in main.py.
+- **Incorrect provider type**: Use singleton for shared resources, factory for stateless services.
+- **Resource cleanup issues**: Ensure resources are properly started/stopped using `providers.Resource`.
+
+### "No provider found error"
+- Check if modules is wired correctly.
+- Verify provider paths math container structure.
+
+### "Takes no arguments error"
+- Ensure provider is called with correct parameters.
+- Check if class expects DI or direct instantiation.
+- Use `providers.Object()` for static instances.
+
+### "Funciont object has no atribute"
+- You´re passing a provider method instead of resolved instance.
+- Resolve provider first `container.some_provider()`.
