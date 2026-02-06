@@ -1,0 +1,1498 @@
+---
+Rule: docker-containers.mdc
+Description: Padrões para Dockerfile e docker-compose com foco em segurança, non-root users, multi-stage builds e boas práticas
+globs: ["**/Dockerfile", "**/docker-compose*.yml", "**/.dockerignore"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["docker", "containers", "security", "devops", "best-practices"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Docker Containers - Melhores Práticas e Segurança
+
+Esta regra estabelece padrões para criação de Dockerfiles e docker-compose.yml com foco em segurança, performance e manutenibilidade.
+
+---
+
+## 1. 🎯 Princípios Fundamentais
+
+### Segurança
+- ✅ **Imagens base oficiais e atualizadas** - Use imagens Microsoft official sem vulnerabilidades conhecidas
+- ✅ **Non-root user** - SEMPRE execute containers com usuário comum (não root)
+- ✅ **Mínimo de privilégios** - Não use `--privileged` nem `CAP_ADD` sem justificativa
+- ✅ **Secrets seguros** - Nunca inclua secrets no Dockerfile ou imagem
+- ✅ **Scan de vulnerabilidades** - Use ferramentas como Trivy ou Snyk
+
+### Performance
+- ✅ **Multi-stage builds** - Separe build de runtime para imagens menores
+- ✅ **Cache de layers** - Ordene instruções do menos para o mais frequentemente modificado
+- ✅ **Minimize layers** - Combine comandos RUN quando possível
+
+### Manutenibilidade
+- ✅ **.dockerignore** - Exclua arquivos desnecessários do contexto
+- ✅ **Labels** - Documente metadados da imagem
+- ✅ **Health checks** - Implemente verificações de saúde
+
+---
+
+## 2. 📋 Dockerfile - ASP.NET Core API
+
+### 2.1. Template Completo (Multi-stage + Non-root)
+
+```dockerfile
+# syntax=docker/dockerfile:1.4
+# ==================================================
+# Stage 1: Build
+# ==================================================
+FROM mcr.microsoft.com/dotnet/sdk:9.0-alpine AS build
+WORKDIR /src
+
+# Copia apenas arquivos de projeto primeiro (melhor cache)
+COPY ["src/Api/Api.csproj", "src/Api/"]
+COPY ["src/Application/Application.csproj", "src/Application/"]
+COPY ["src/Domain/Domain.csproj", "src/Domain/"]
+COPY ["src/Infrastructure/Infrastructure.csproj", "src/Infrastructure/"]
+
+# Restore como camada separada (cache)
+RUN dotnet restore "src/Api/Api.csproj" \
+    --runtime linux-musl-x64
+
+# Copia todo o código fonte
+COPY . .
+
+# Build e publish
+WORKDIR "/src/src/Api"
+RUN dotnet publish "Api.csproj" \
+    --configuration Release \
+    --runtime linux-musl-x64 \
+    --self-contained false \
+    --no-restore \
+    --output /app/publish \
+    /p:PublishTrimmed=false \
+    /p:PublishSingleFile=false
+
+# ==================================================
+# Stage 2: Runtime
+# ==================================================
+FROM mcr.microsoft.com/dotnet/aspnet:9.0-alpine AS runtime
+
+# Metadata
+LABEL maintainer="seu-email@empresa.com"
+LABEL description="API .NET 9 - Production Ready"
+LABEL version="1.0.0"
+
+# Instalar dependências de segurança (se necessário)
+RUN apk add --no-cache \
+    ca-certificates \
+    tzdata \
+    && update-ca-certificates
+
+# Criar usuário non-root
+RUN addgroup -g 1000 appgroup \
+    && adduser -u 1000 -G appgroup -s /bin/sh -D appuser
+
+# Configurar diretórios com permissões corretas
+WORKDIR /app
+RUN chown -R appuser:appgroup /app
+
+# Copiar binários do stage build
+COPY --from=build --chown=appuser:appgroup /app/publish .
+
+# Configurar timezone (opcional)
+ENV TZ=America/Sao_Paulo
+
+# Configurar variáveis de ambiente .NET
+ENV ASPNETCORE_URLS=http://+:8080 \
+    DOTNET_RUNNING_IN_CONTAINER=true \
+    DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=false
+
+# Expor porta (apenas documentação)
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/healthz || exit 1
+
+# Trocar para usuário non-root
+USER appuser
+
+# Entrypoint
+ENTRYPOINT ["dotnet", "Api.dll"]
+```
+
+### 2.2. Dockerfile - Console App / Worker
+
+```dockerfile
+# syntax=docker/dockerfile:1.4
+FROM mcr.microsoft.com/dotnet/sdk:9.0-alpine AS build
+WORKDIR /src
+
+COPY ["src/Worker/Worker.csproj", "src/Worker/"]
+RUN dotnet restore "src/Worker/Worker.csproj" --runtime linux-musl-x64
+
+COPY . .
+WORKDIR "/src/src/Worker"
+RUN dotnet publish "Worker.csproj" \
+    --configuration Release \
+    --runtime linux-musl-x64 \
+    --self-contained false \
+    --no-restore \
+    --output /app/publish
+
+FROM mcr.microsoft.com/dotnet/runtime:9.0-alpine AS runtime
+
+LABEL maintainer="seu-email@empresa.com"
+LABEL description="Worker .NET 9"
+
+RUN apk add --no-cache ca-certificates tzdata \
+    && update-ca-certificates
+
+RUN addgroup -g 1000 appgroup \
+    && adduser -u 1000 -G appgroup -s /bin/sh -D appuser
+
+WORKDIR /app
+RUN chown -R appuser:appgroup /app
+
+COPY --from=build --chown=appuser:appgroup /app/publish .
+
+ENV TZ=America/Sao_Paulo \
+    DOTNET_RUNNING_IN_CONTAINER=true
+
+USER appuser
+
+ENTRYPOINT ["dotnet", "Worker.dll"]
+```
+
+### 2.3. Otimizações Importantes
+
+```dockerfile
+# ❌ EVITE - Instalar pacotes desnecessários
+RUN apt-get update && apt-get install -y \
+    curl wget vim nano htop git
+
+# ✅ CORRETO - Apenas o essencial
+RUN apk add --no-cache ca-certificates tzdata
+
+# ❌ EVITE - Múltiplos layers desnecessários
+RUN dotnet restore
+RUN dotnet build
+RUN dotnet publish
+
+# ✅ CORRETO - Combine quando possível
+RUN dotnet restore && \
+    dotnet build && \
+    dotnet publish
+
+# ❌ EVITE - Root user em produção
+USER root
+ENTRYPOINT ["dotnet", "Api.dll"]
+
+# ✅ CORRETO - Non-root user
+USER appuser
+ENTRYPOINT ["dotnet", "Api.dll"]
+
+# ❌ EVITE - Secrets hardcoded
+ENV DATABASE_PASSWORD="senha123"
+ENV JWT_SECRET="meu-secret-super-secreto"
+
+# ✅ CORRETO - Use secrets managers ou variáveis de ambiente em tempo de execução
+# Configurar via docker-compose, Kubernetes secrets, Azure Key Vault, etc.
+```
+
+---
+
+## 3. 📝 .dockerignore
+
+### 3.1. Template Completo
+
+```dockerignore
+# Binários e Build
+**/bin/
+**/obj/
+**/out/
+**/publish/
+
+# IDEs
+**/.vs/
+**/.vscode/
+**/.idea/
+**/*.user
+**/*.suo
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Docker
+**/Dockerfile*
+**/docker-compose*
+**/.dockerignore
+
+# Documentação
+**/*.md
+**/docs/
+
+# Testes
+**/tests/
+**/*Tests/
+**/*.Tests/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+azure-pipelines.yml
+Jenkinsfile
+
+# Logs e temporários
+**/logs/
+**/*.log
+**/tmp/
+**/temp/
+
+# Pacotes NuGet (serão restaurados no build)
+**/*.nupkg
+**/packages/
+
+# Node (se usar frontend)
+**/node_modules/
+**/dist/
+**/build/
+
+# Outros
+**/.env
+**/.env.*
+**/secrets.json
+**/*.pfx
+**/*.key
+```
+
+---
+
+## 4. 🐳 docker-compose.yml
+
+### 4.1. API + PostgreSQL + Redis (Desenvolvimento)
+
+```yaml
+version: '3.9'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: src/Api/Dockerfile
+      args:
+        - BUILDKIT_INLINE_CACHE=1
+    image: myapp-api:latest
+    container_name: myapp-api
+    restart: unless-stopped
+    
+    # Non-root user (mesmo UID/GID do Dockerfile)
+    user: "1000:1000"
+    
+    ports:
+      - "8080:8080"
+    
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=myapp;Username=myapp;Password=${DB_PASSWORD:-changeme}
+      - Redis__Configuration=redis:6379
+      - Serilog__MinimumLevel__Default=Information
+    
+    # Secrets via environment file (não commitar!)
+    env_file:
+      - .env.local
+    
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    
+    networks:
+      - app-network
+    
+    volumes:
+      # Logs persistentes
+      - ./logs:/app/logs
+    
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    
+    # Limites de recursos
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    
+    # Security
+    security_opt:
+      - no-new-privileges:true
+    read_only: false
+    tmpfs:
+      - /tmp
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: myapp-postgres
+    restart: unless-stopped
+    
+    # Non-root user (postgres user padrão)
+    user: postgres
+    
+    environment:
+      - POSTGRES_DB=myapp
+      - POSTGRES_USER=myapp
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-changeme}
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
+    
+    ports:
+      - "5432:5432"
+    
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    
+    networks:
+      - app-network
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U myapp -d myapp"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  redis:
+    image: redis:7-alpine
+    container_name: myapp-redis
+    restart: unless-stopped
+    
+    # Non-root user (redis user padrão)
+    user: redis
+    
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD:-changeme}
+      --maxmemory 128mb
+      --maxmemory-policy allkeys-lru
+    
+    ports:
+      - "6379:6379"
+    
+    volumes:
+      - redis-data:/data
+    
+    networks:
+      - app-network
+    
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+
+networks:
+  app-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+```
+
+### 4.2. Microservices com Observabilidade (Produção-like)
+
+```yaml
+version: '3.9'
+
+services:
+  # ============================================
+  # API Gateway
+  # ============================================
+  gateway:
+    build:
+      context: .
+      dockerfile: src/Gateway/Dockerfile
+      target: runtime
+    image: myapp-gateway:${VERSION:-latest}
+    container_name: gateway
+    restart: unless-stopped
+    user: "1000:1000"
+    
+    ports:
+      - "8080:8080"
+    
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Production}
+      - Services__OrderApi=http://order-api:8081
+      - Services__PaymentApi=http://payment-api:8082
+      - Observability__OtlpEndpoint=http://otel-collector:4317
+    
+    depends_on:
+      - order-api
+      - payment-api
+      - otel-collector
+    
+    networks:
+      - microservices
+    
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    
+    security_opt:
+      - no-new-privileges:true
+
+  # ============================================
+  # Order API
+  # ============================================
+  order-api:
+    build:
+      context: .
+      dockerfile: src/Services/Order/Dockerfile
+    image: myapp-order-api:${VERSION:-latest}
+    container_name: order-api
+    restart: unless-stopped
+    user: "1000:1000"
+    
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Production}
+      - ASPNETCORE_URLS=http://+:8081
+      - Database__ConnectionString=${ORDER_DB_CONNECTION}
+      - Observability__OtlpEndpoint=http://otel-collector:4317
+    
+    networks:
+      - microservices
+    
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8081/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    
+    security_opt:
+      - no-new-privileges:true
+
+  # ============================================
+  # Payment API
+  # ============================================
+  payment-api:
+    build:
+      context: .
+      dockerfile: src/Services/Payment/Dockerfile
+    image: myapp-payment-api:${VERSION:-latest}
+    container_name: payment-api
+    restart: unless-stopped
+    user: "1000:1000"
+    
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Production}
+      - ASPNETCORE_URLS=http://+:8082
+      - Database__ConnectionString=${PAYMENT_DB_CONNECTION}
+      - Observability__OtlpEndpoint=http://otel-collector:4317
+    
+    networks:
+      - microservices
+    
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8082/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    
+    security_opt:
+      - no-new-privileges:true
+
+  # ============================================
+  # OpenTelemetry Collector
+  # ============================================
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel-collector
+    restart: unless-stopped
+    
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    
+    volumes:
+      - ./observability/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "8889:8889"   # Prometheus metrics
+    
+    networks:
+      - microservices
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+
+  # ============================================
+  # Prometheus
+  # ============================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    user: "65534:65534"  # nobody user
+    
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    
+    ports:
+      - "9090:9090"
+    
+    networks:
+      - microservices
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # ============================================
+  # Grafana
+  # ============================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    user: "472:472"  # grafana user
+    
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./observability/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./observability/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    
+    ports:
+      - "3000:3000"
+    
+    networks:
+      - microservices
+    
+    depends_on:
+      - prometheus
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+
+networks:
+  microservices:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:
+```
+
+### 4.3. Secrets e Variáveis de Ambiente
+
+```bash
+# .env.example (commitar este arquivo como template)
+# Copiar para .env.local e preencher valores reais (NÃO commitar .env.local)
+
+# Database
+DB_PASSWORD=
+POSTGRES_PASSWORD=
+
+# Redis
+REDIS_PASSWORD=
+
+# Observability
+GRAFANA_USER=admin
+GRAFANA_PASSWORD=
+
+# Application
+ASPNETCORE_ENVIRONMENT=Development
+JWT_SECRET=
+ENCRYPTION_KEY=
+```
+
+### 4.4. Scripts de Gerenciamento
+
+```bash
+#!/bin/bash
+# scripts/docker-build.sh
+
+set -euo pipefail
+
+VERSION=${1:-latest}
+ENVIRONMENT=${2:-production}
+
+echo "Building Docker images..."
+echo "Version: $VERSION"
+echo "Environment: $ENVIRONMENT"
+
+# Build com BuildKit
+DOCKER_BUILDKIT=1 docker-compose build \
+    --build-arg VERSION=$VERSION \
+    --build-arg BUILDKIT_INLINE_CACHE=1
+
+# Tag images
+docker tag myapp-api:latest myapp-api:$VERSION
+docker tag myapp-gateway:latest myapp-gateway:$VERSION
+
+echo "Build completed successfully!"
+```
+
+---
+
+## 5. 🔒 Security Scanning
+
+### 5.1. Trivy (Recomendado)
+
+```bash
+# Instalar Trivy (macOS)
+brew install aquasecurity/trivy/trivy
+
+# Scan de vulnerabilidades na imagem
+trivy image myapp-api:latest
+
+# Scan com severidade HIGH e CRITICAL apenas
+trivy image --severity HIGH,CRITICAL myapp-api:latest
+
+# Scan com output JSON
+trivy image --format json --output trivy-report.json myapp-api:latest
+
+# Scan de Dockerfile
+trivy config Dockerfile
+
+# Scan de docker-compose.yml
+trivy config docker-compose.yml
+
+# CI/CD: Fail build se encontrar vulnerabilidades CRITICAL
+trivy image --exit-code 1 --severity CRITICAL myapp-api:latest
+```
+
+### 5.2. Snyk
+
+```bash
+# Instalar Snyk CLI
+npm install -g snyk
+
+# Autenticar
+snyk auth
+
+# Scan de imagem Docker
+snyk container test myapp-api:latest
+
+# Scan com severidade HIGH apenas
+snyk container test myapp-api:latest --severity-threshold=high
+
+# Monitoramento contínuo
+snyk container monitor myapp-api:latest
+
+# Test Dockerfile
+snyk iac test Dockerfile
+```
+
+### 5.3. Docker Scout (Nativo Docker Desktop)
+
+```bash
+# Habilitar Docker Scout
+docker scout quickview
+
+# Scan de imagem
+docker scout cves myapp-api:latest
+
+# Comparar com versão anterior
+docker scout compare --to myapp-api:previous myapp-api:latest
+
+# Recomendações de atualização de base image
+docker scout recommendations myapp-api:latest
+```
+
+### 5.4. GitHub Actions - Security Scan Pipeline
+
+```yaml
+# .github/workflows/docker-security-scan.yml
+name: Docker Security Scan
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Scan diário às 2am UTC
+    - cron: '0 2 * * *'
+
+jobs:
+  scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      security-events: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Build Docker image
+        run: |
+          docker build -t myapp-api:${{ github.sha }} \
+            -f src/Api/Dockerfile .
+      
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'myapp-api:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'  # Fail pipeline se encontrar vulnerabilidades
+      
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+      
+      - name: Run Snyk scan
+        uses: snyk/actions/docker@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: 'myapp-api:${{ github.sha }}'
+          args: --severity-threshold=high
+      
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Security vulnerabilities found! Check Security tab for details."
+```
+
+### 5.5. GitLab CI - Security Scan Pipeline
+
+```yaml
+# .gitlab-ci.yml
+stages:
+  - build
+  - security
+  - deploy
+
+variables:
+  IMAGE_NAME: $CI_REGISTRY_IMAGE/api
+  IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+
+build:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - docker build -t $IMAGE_NAME:$IMAGE_TAG -f src/Api/Dockerfile .
+    - docker push $IMAGE_NAME:$IMAGE_TAG
+  only:
+    - main
+    - develop
+
+container_scanning:
+  stage: security
+  image: aquasec/trivy:latest
+  services:
+    - docker:dind
+  variables:
+    GIT_STRATEGY: none
+  script:
+    # Scan com Trivy
+    - trivy image --exit-code 1 --severity CRITICAL,HIGH $IMAGE_NAME:$IMAGE_TAG
+    # Gerar relatório
+    - trivy image --format json --output trivy-report.json $IMAGE_NAME:$IMAGE_TAG
+  artifacts:
+    reports:
+      container_scanning: trivy-report.json
+    expire_in: 1 week
+  allow_failure: false
+  only:
+    - main
+    - develop
+
+sast:
+  stage: security
+  image: returntocorp/semgrep:latest
+  script:
+    - semgrep --config=auto --json --output=semgrep-report.json
+  artifacts:
+    reports:
+      sast: semgrep-report.json
+  allow_failure: true
+```
+
+---
+
+## 6. ☸️ Kubernetes (Deploy em Produção)
+
+### 6.1. Deployment Manifest
+
+```yaml
+# k8s/api-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp-api
+  namespace: production
+  labels:
+    app: myapp-api
+    version: v1
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: myapp-api
+  template:
+    metadata:
+      labels:
+        app: myapp-api
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Security Context para o Pod
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      
+      containers:
+      - name: api
+        image: myregistry.azurecr.io/myapp-api:1.0.0
+        imagePullPolicy: IfNotPresent
+        
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        
+        env:
+        - name: ASPNETCORE_ENVIRONMENT
+          value: "Production"
+        - name: ASPNETCORE_URLS
+          value: "http://+:8080"
+        - name: ConnectionStrings__DefaultConnection
+          valueFrom:
+            secretKeyRef:
+              name: myapp-secrets
+              key: db-connection-string
+        - name: Redis__Configuration
+          valueFrom:
+            configMapKeyRef:
+              name: myapp-config
+              key: redis-connection
+        
+        # Resources
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        
+        # Health checks
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30
+        
+        # Security Context para o Container
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+              - ALL
+        
+        # Volumes
+        volumeMounts:
+        - name: logs
+          mountPath: /app/logs
+        - name: tmp
+          mountPath: /tmp
+      
+      volumes:
+      - name: logs
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+      
+      # Image pull secrets
+      imagePullSecrets:
+      - name: acr-secret
+      
+      # Node affinity para distribuição em zonas
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - myapp-api
+              topologyKey: kubernetes.io/hostname
+```
+
+### 6.2. Service e Ingress
+
+```yaml
+# k8s/api-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-api
+  namespace: production
+  labels:
+    app: myapp-api
+spec:
+  type: ClusterIP
+  selector:
+    app: myapp-api
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+    protocol: TCP
+
+---
+# k8s/api-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: myapp-api
+  namespace: production
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - api.myapp.com
+    secretName: myapp-api-tls
+  rules:
+  - host: api.myapp.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: myapp-api
+            port:
+              name: http
+```
+
+### 6.3. Secrets e ConfigMaps
+
+```yaml
+# k8s/secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: myapp-secrets
+  namespace: production
+type: Opaque
+stringData:
+  db-connection-string: "Host=postgres.production.svc.cluster.local;Database=myapp;Username=myapp;Password=CHANGE_ME"
+  jwt-secret: "CHANGE_ME"
+  encryption-key: "CHANGE_ME"
+
+---
+# k8s/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: myapp-config
+  namespace: production
+data:
+  redis-connection: "redis.production.svc.cluster.local:6379"
+  aspnetcore-environment: "Production"
+  serilog-minimum-level: "Information"
+```
+
+### 6.4. HorizontalPodAutoscaler
+
+```yaml
+# k8s/api-hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: myapp-api
+  namespace: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: myapp-api
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+      - type: Pods
+        value: 2
+        periodSeconds: 15
+      selectPolicy: Max
+```
+
+---
+
+## 7. 🚀 CI/CD Integration
+
+### 7.1. GitHub Actions - Complete Pipeline
+
+```yaml
+# .github/workflows/docker-cicd.yml
+name: Docker CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*.*.*']
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/api
+
+jobs:
+  # ============================================
+  # Build and Test
+  # ============================================
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+      
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./src/Api/Dockerfile
+          push: false
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.meta.outputs.version }}
+      
+      - name: Run Trivy security scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+      
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+      
+      - name: Push Docker image
+        uses: docker/build-push-action@v5
+        if: github.event_name != 'pull_request'
+        with:
+          context: .
+          file: ./src/Api/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+  
+  # ============================================
+  # Deploy to Kubernetes
+  # ============================================
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    
+    environment:
+      name: production
+      url: https://api.myapp.com
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+      
+      - name: Configure kubectl
+        run: |
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig.yaml
+          export KUBECONFIG=kubeconfig.yaml
+      
+      - name: Deploy to Kubernetes
+        run: |
+          export IMAGE_TAG=${{ github.sha }}
+          envsubst < k8s/api-deployment.yaml | kubectl apply -f -
+          kubectl rollout status deployment/myapp-api -n production --timeout=5m
+      
+      - name: Verify deployment
+        run: |
+          kubectl get pods -n production -l app=myapp-api
+          kubectl get svc -n production myapp-api
+```
+
+### 7.2. Azure Pipelines
+
+```yaml
+# azure-pipelines.yml
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  tags:
+    include:
+      - v*
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  imageName: 'myapp-api'
+  dockerRegistryServiceConnection: 'ACR-Connection'
+  imageRepository: 'myregistry.azurecr.io/$(imageName)'
+  dockerfilePath: 'src/Api/Dockerfile'
+  tag: '$(Build.BuildId)'
+
+stages:
+- stage: Build
+  displayName: 'Build and Push'
+  jobs:
+  - job: Docker
+    displayName: 'Docker Build'
+    steps:
+    - task: Docker@2
+      displayName: 'Build image'
+      inputs:
+        command: build
+        repository: $(imageRepository)
+        dockerfile: $(dockerfilePath)
+        containerRegistry: $(dockerRegistryServiceConnection)
+        tags: |
+          $(tag)
+          latest
+        arguments: '--build-arg BUILD_DATE=$(Build.BuildNumber) --build-arg VCS_REF=$(Build.SourceVersion)'
+    
+    - script: |
+        docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+          aquasec/trivy:latest image --exit-code 1 --severity CRITICAL,HIGH \
+          $(imageRepository):$(tag)
+      displayName: 'Run Trivy scan'
+    
+    - task: Docker@2
+      displayName: 'Push image'
+      inputs:
+        command: push
+        repository: $(imageRepository)
+        containerRegistry: $(dockerRegistryServiceConnection)
+        tags: |
+          $(tag)
+          latest
+
+- stage: Deploy
+  displayName: 'Deploy to AKS'
+  dependsOn: Build
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+  - deployment: DeployToAKS
+    displayName: 'Deploy to Azure Kubernetes Service'
+    environment: 'production'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: KubernetesManifest@0
+            displayName: 'Deploy to Kubernetes'
+            inputs:
+              action: 'deploy'
+              kubernetesServiceConnection: 'AKS-Connection'
+              namespace: 'production'
+              manifests: |
+                k8s/api-deployment.yaml
+                k8s/api-service.yaml
+              containers: |
+                $(imageRepository):$(tag)
+```
+
+---
+
+## 8. ✅ Checklist de Boas Práticas
+
+### 8.1. Segurança
+
+- [ ] **Non-root user**: Container SEMPRE executa com usuário não-root (`USER appuser`)
+- [ ] **Imagens oficiais**: Usar apenas imagens oficiais da Microsoft (`mcr.microsoft.com`)
+- [ ] **Alpine Linux**: Preferir imagens alpine para menor superfície de ataque
+- [ ] **Multi-stage build**: Separar build de runtime para imagens menores
+- [ ] **Secrets**: NUNCA hardcoded no Dockerfile ou docker-compose.yml
+- [ ] **Scan de vulnerabilidades**: Trivy/Snyk executado no CI/CD
+- [ ] **Read-only filesystem**: Considerar `readOnlyRootFilesystem: true` em K8s
+- [ ] **Drop capabilities**: Remover capabilities desnecessárias (`drop: ALL`)
+- [ ] **Security options**: `no-new-privileges:true` em docker-compose
+- [ ] **.dockerignore**: Excluir binários, secrets, logs, .git
+
+### 8.2. Performance
+
+- [ ] **Cache de layers**: COPY de arquivos estáticos antes de COPY do código
+- [ ] **Minimize layers**: Combinar RUN commands quando possível
+- [ ] **BuildKit**: Usar `DOCKER_BUILDKIT=1` para builds paralelos
+- [ ] **Resource limits**: Definir CPU/memory limits em docker-compose e K8s
+- [ ] **Health checks**: Implementar `/healthz` e `/readyz` endpoints
+- [ ] **Alpine images**: Usar alpine para reduzir tamanho da imagem
+- [ ] **Logs estruturados**: JSON logging para Prometheus/Grafana
+- [ ] **Startup time**: Otimizar tempo de inicialização do container
+
+### 8.3. Manutenibilidade
+
+- [ ] **Labels**: Adicionar labels descritivos nas imagens Docker
+- [ ] **Versionamento**: Tags semânticas (v1.0.0, não latest em produção)
+- [ ] **Documentation**: README.md com instruções de build/run
+- [ ] **Environment variables**: Documentar todas as envvars necessárias
+- [ ] **docker-compose.yml**: Um arquivo para dev, outro para produção
+- [ ] **Scripts de automação**: docker-build.sh, docker-run.sh, docker-clean.sh
+- [ ] **Observability**: Integração com OpenTelemetry/Prometheus/Grafana
+- [ ] **Graceful shutdown**: Implementar CancellationToken em ASP.NET Core
+
+### 8.4. CI/CD
+
+- [ ] **Automated builds**: GitHub Actions/GitLab CI/Azure Pipelines
+- [ ] **Security scanning**: Trivy/Snyk no pipeline
+- [ ] **Automated tests**: Rodar testes antes do build da imagem
+- [ ] **Container registry**: Push automático para ACR/DockerHub/GHCR
+- [ ] **Rollback strategy**: Tag de versão anterior sempre disponível
+- [ ] **Blue-green deployment**: Zero downtime em Kubernetes
+- [ ] **Monitoring**: Alertas configurados para falhas de build/deploy
+
+### 8.5. Kubernetes (se aplicável)
+
+- [ ] **SecurityContext**: `runAsNonRoot: true`, `runAsUser: 1000`
+- [ ] **Resource requests/limits**: CPU e memory definidos
+- [ ] **Liveness/Readiness probes**: Health checks configurados
+- [ ] **HorizontalPodAutoscaler**: Escalonamento automático
+- [ ] **PodDisruptionBudget**: Mínimo de pods disponíveis durante updates
+- [ ] **NetworkPolicy**: Isolar comunicação entre pods
+- [ ] **Secrets**: Usar Kubernetes Secrets ou Azure Key Vault
+- [ ] **Ingress**: TLS/SSL configurado com cert-manager
+
+---
+
+## 9. 📚 Referências
+
+### 9.1. Documentação Oficial
+
+- [Docker Best Practices](https://docs.docker.com/develop/dev-best-practices/)
+- [.NET Docker Images](https://hub.docker.com/_/microsoft-dotnet)
+- [ASP.NET Core in Containers](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/docker/)
+- [Kubernetes Best Practices](https://kubernetes.io/docs/concepts/configuration/overview/)
+
+### 9.2. Security
+
+- [CIS Docker Benchmark](https://www.cisecurity.org/benchmark/docker)
+- [OWASP Docker Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html)
+- [Snyk Container Security](https://snyk.io/learn/container-security/)
+
+### 9.3. Ferramentas
+
+- [Trivy Scanner](https://trivy.dev/)
+- [Snyk](https://snyk.io/)
+- [Docker Scout](https://docs.docker.com/scout/)
+
+---
+
+## ⚠️ Avisos Importantes
+
+1. **NUNCA execute containers como root em produção** - Use `USER appuser` no Dockerfile e `runAsUser` no Kubernetes
+2. **SEMPRE escaneie imagens antes do deploy** - Trivy/Snyk no CI/CD pipeline
+3. **NUNCA commite secrets** - Use .env.local (gitignored) e Kubernetes Secrets
+4. **SEMPRE use multi-stage builds** - Imagens runtime devem conter apenas binários necessários
+5. **SEMPRE defina resource limits** - Evite que um container consuma todos os recursos do host
+6. **SEMPRE implemente health checks** - `/healthz` e `/readyz` endpoints são obrigatórios
+7. **SEMPRE use imagens oficiais** - `mcr.microsoft.com/dotnet/aspnet` e `mcr.microsoft.com/dotnet/sdk`
+
+---
+
+**Última atualização**: 2024-01-15  
+**Versão da regra**: 1.0.0
+
+

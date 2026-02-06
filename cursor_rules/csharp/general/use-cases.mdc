@@ -1,0 +1,1222 @@
+---
+Rule: use-cases.mdc
+Description: Padrões para implementação de Use Cases com CQRS, MediatR e Result Pattern
+globs: ["**/*.cs"]
+rules: @csharp-style-guide, @fluentvalidation
+alwaysApply: false
+tags: ["csharp", "use-cases", "cqrs", "mediatr", "clean-architecture"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Use Cases - CQRS e MediatR
+
+Este documento padroniza a implementação de Use Cases (Casos de Uso) usando CQRS (Command Query Responsibility Segregation), MediatR e Result Pattern para Clean Architecture.
+
+---
+
+## 1. 🎯 Conceitos Fundamentais
+
+### 1.1. CQRS Pattern
+
+```csharp
+// CQRS separa operações de leitura (Queries) e escrita (Commands)
+
+// ✅ Commands - Modificam estado (Create, Update, Delete)
+// - Retornam Result<T> ou Unit
+// - Validados antes da execução
+// - Podem disparar eventos de domínio
+
+// ✅ Queries - Somente leitura (Get, List, Search)
+// - Retornam DTOs/ViewModels
+// - Não modificam estado
+// - Podem usar cache
+// - Otimizadas para leitura
+```
+
+### 1.2. MediatR Pattern
+
+```csharp
+// MediatR implementa mediator pattern para desacoplar use cases
+
+// ✅ Vantagens:
+// - Controllers finos (thin controllers)
+// - Lógica de negócio centralizada em handlers
+// - Pipeline de behaviors (validação, logging, transação)
+// - Testabilidade aumentada
+// - Reduz acoplamento
+```
+
+---
+
+## 2. 📝 Commands - Operações de Escrita
+
+### 2.1. Command Structure
+
+```csharp
+// ✅ CORRETO - Command bem estruturado
+
+namespace Company.Product.Application.Users.Commands.CreateUser;
+
+// Command (Imutável com record)
+public record CreateUserCommand : IRequest<Result<UserResponse>>
+{
+    public string FirstName { get; init; } = string.Empty;
+    public string LastName { get; init; } = string.Empty;
+    public string Email { get; init; } = string.Empty;
+    public DateTime DateOfBirth { get; init; }
+}
+
+// Validator (FluentValidation)
+public class CreateUserCommandValidator : AbstractValidator<CreateUserCommand>
+{
+    public CreateUserCommandValidator()
+    {
+        RuleFor(x => x.FirstName)
+            .NotEmpty().WithMessage("First name is required")
+            .MaximumLength(100).WithMessage("First name must not exceed 100 characters");
+
+        RuleFor(x => x.LastName)
+            .NotEmpty().WithMessage("Last name is required")
+            .MaximumLength(100).WithMessage("Last name must not exceed 100 characters");
+
+        RuleFor(x => x.Email)
+            .NotEmpty().WithMessage("Email is required")
+            .EmailAddress().WithMessage("Email must be valid")
+            .MaximumLength(255).WithMessage("Email must not exceed 255 characters");
+
+        RuleFor(x => x.DateOfBirth)
+            .NotEmpty().WithMessage("Date of birth is required")
+            .LessThan(DateTime.UtcNow).WithMessage("Date of birth must be in the past")
+            .GreaterThan(DateTime.UtcNow.AddYears(-150)).WithMessage("Invalid date of birth");
+    }
+}
+
+// Handler
+public class CreateUserCommandHandler : IRequestHandler<CreateUserCommand, Result<UserResponse>>
+{
+    private readonly IUserRepository _userRepository;
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly ILogger<CreateUserCommandHandler> _logger;
+    private readonly IMapper _mapper;
+
+    public CreateUserCommandHandler(
+        IUserRepository userRepository,
+        IUnitOfWork unitOfWork,
+        ILogger<CreateUserCommandHandler> logger,
+        IMapper mapper)
+    {
+        _userRepository = userRepository;
+        _unitOfWork = unitOfWork;
+        _logger = logger;
+        _mapper = mapper;
+    }
+
+    public async Task<Result<UserResponse>> Handle(
+        CreateUserCommand request,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogInformation(
+            "Creating user with email {Email}",
+            request.Email);
+
+        // Verificar se email já existe
+        if (await _userRepository.ExistsAsync(u => u.Email == request.Email, cancellationToken))
+        {
+            _logger.LogWarning("User with email {Email} already exists", request.Email);
+            return Result<UserResponse>.Failure("User with this email already exists");
+        }
+
+        // Criar entidade
+        var user = new User(
+            Guid.NewGuid(),
+            request.FirstName,
+            request.LastName,
+            request.Email,
+            request.DateOfBirth);
+
+        // Persistir
+        await _userRepository.AddAsync(user, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation("User created with ID {UserId}", user.Id);
+
+        // Mapear para response
+        var response = _mapper.Map<UserResponse>(user);
+        return Result<UserResponse>.Success(response);
+    }
+}
+```
+
+### 2.2. Update Command
+
+```csharp
+// ✅ CORRETO - Update command
+
+namespace Company.Product.Application.Users.Commands.UpdateUser;
+
+public record UpdateUserCommand : IRequest<Result<UserResponse>>
+{
+    public Guid Id { get; init; }
+    public string FirstName { get; init; } = string.Empty;
+    public string LastName { get; init; } = string.Empty;
+    public string Email { get; init; } = string.Empty;
+}
+
+public class UpdateUserCommandValidator : AbstractValidator<UpdateUserCommand>
+{
+    public UpdateUserCommandValidator()
+    {
+        RuleFor(x => x.Id)
+            .NotEmpty().WithMessage("User ID is required");
+
+        RuleFor(x => x.FirstName)
+            .NotEmpty().WithMessage("First name is required")
+            .MaximumLength(100);
+
+        RuleFor(x => x.LastName)
+            .NotEmpty().WithMessage("Last name is required")
+            .MaximumLength(100);
+
+        RuleFor(x => x.Email)
+            .NotEmpty().WithMessage("Email is required")
+            .EmailAddress().WithMessage("Email must be valid")
+            .MaximumLength(255);
+    }
+}
+
+public class UpdateUserCommandHandler : IRequestHandler<UpdateUserCommand, Result<UserResponse>>
+{
+    private readonly IUserRepository _userRepository;
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly ILogger<UpdateUserCommandHandler> _logger;
+    private readonly IMapper _mapper;
+
+    public UpdateUserCommandHandler(
+        IUserRepository userRepository,
+        IUnitOfWork unitOfWork,
+        ILogger<UpdateUserCommandHandler> logger,
+        IMapper mapper)
+    {
+        _userRepository = userRepository;
+        _unitOfWork = unitOfWork;
+        _logger = logger;
+        _mapper = mapper;
+    }
+
+    public async Task<Result<UserResponse>> Handle(
+        UpdateUserCommand request,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Updating user {UserId}", request.Id);
+
+        // Buscar usuário
+        var user = await _userRepository.GetByIdAsync(request.Id, cancellationToken);
+        if (user == null)
+        {
+            _logger.LogWarning("User {UserId} not found", request.Id);
+            return Result<UserResponse>.Failure($"User with ID {request.Id} not found");
+        }
+
+        // Verificar se email já está em uso por outro usuário
+        if (await _userRepository.ExistsAsync(
+            u => u.Email == request.Email && u.Id != request.Id,
+            cancellationToken))
+        {
+            _logger.LogWarning(
+                "Email {Email} already in use by another user",
+                request.Email);
+            return Result<UserResponse>.Failure("Email already in use");
+        }
+
+        // Atualizar entidade (usando método de mutação que revalida)
+        user.Update(request.FirstName, request.LastName, request.Email);
+
+        // Persistir
+        _userRepository.Update(user);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation("User {UserId} updated successfully", request.Id);
+
+        var response = _mapper.Map<UserResponse>(user);
+        return Result<UserResponse>.Success(response);
+    }
+}
+```
+
+### 2.3. Delete Command
+
+```csharp
+// ✅ CORRETO - Delete command
+
+namespace Company.Product.Application.Users.Commands.DeleteUser;
+
+public record DeleteUserCommand(Guid Id) : IRequest<Result<Unit>>;
+
+public class DeleteUserCommandValidator : AbstractValidator<DeleteUserCommand>
+{
+    public DeleteUserCommandValidator()
+    {
+        RuleFor(x => x.Id)
+            .NotEmpty().WithMessage("User ID is required");
+    }
+}
+
+public class DeleteUserCommandHandler : IRequestHandler<DeleteUserCommand, Result<Unit>>
+{
+    private readonly IUserRepository _userRepository;
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly ILogger<DeleteUserCommandHandler> _logger;
+
+    public DeleteUserCommandHandler(
+        IUserRepository userRepository,
+        IUnitOfWork unitOfWork,
+        ILogger<DeleteUserCommandHandler> logger)
+    {
+        _userRepository = userRepository;
+        _unitOfWork = unitOfWork;
+        _logger = logger;
+    }
+
+    public async Task<Result<Unit>> Handle(
+        DeleteUserCommand request,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Deleting user {UserId}", request.Id);
+
+        var user = await _userRepository.GetByIdAsync(request.Id, cancellationToken);
+        if (user == null)
+        {
+            _logger.LogWarning("User {UserId} not found", request.Id);
+            return Result<Unit>.Failure($"User with ID {request.Id} not found");
+        }
+
+        // Verificar regras de negócio (ex: não pode deletar usuário com pedidos)
+        if (await _userRepository.HasActiveOrdersAsync(request.Id, cancellationToken))
+        {
+            _logger.LogWarning("Cannot delete user {UserId} with active orders", request.Id);
+            return Result<Unit>.Failure("Cannot delete user with active orders");
+        }
+
+        _userRepository.Delete(user);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation("User {UserId} deleted successfully", request.Id);
+
+        return Result<Unit>.Success(Unit.Value);
+    }
+}
+```
+
+---
+
+## 3. 🔍 Queries - Operações de Leitura
+
+### 3.1. Get Query
+
+```csharp
+// ✅ CORRETO - Get query
+
+namespace Company.Product.Application.Users.Queries.GetUser;
+
+public record GetUserQuery(Guid Id) : IRequest<Result<UserResponse>>;
+
+public class GetUserQueryValidator : AbstractValidator<GetUserQuery>
+{
+    public GetUserQueryValidator()
+    {
+        RuleFor(x => x.Id)
+            .NotEmpty().WithMessage("User ID is required");
+    }
+}
+
+public class GetUserQueryHandler : IRequestHandler<GetUserQuery, Result<UserResponse>>
+{
+    private readonly IUserRepository _userRepository;
+    private readonly ILogger<GetUserQueryHandler> _logger;
+    private readonly IMapper _mapper;
+
+    public GetUserQueryHandler(
+        IUserRepository userRepository,
+        ILogger<GetUserQueryHandler> logger,
+        IMapper mapper)
+    {
+        _userRepository = userRepository;
+        _logger = logger;
+        _mapper = mapper;
+    }
+
+    public async Task<Result<UserResponse>> Handle(
+        GetUserQuery request,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Getting user {UserId}", request.Id);
+
+        var user = await _userRepository.GetByIdAsync(request.Id, cancellationToken);
+        if (user == null)
+        {
+            _logger.LogWarning("User {UserId} not found", request.Id);
+            return Result<UserResponse>.Failure($"User with ID {request.Id} not found");
+        }
+
+        var response = _mapper.Map<UserResponse>(user);
+        return Result<UserResponse>.Success(response);
+    }
+}
+```
+
+### 3.2. List Query
+
+```csharp
+// ✅ CORRETO - List query com paginação
+
+namespace Company.Product.Application.Users.Queries.ListUsers;
+
+public record ListUsersQuery : IRequest<Result<PagedResult<UserResponse>>>
+{
+    public int PageNumber { get; init; } = 1;
+    public int PageSize { get; init; } = 10;
+    public string? SearchTerm { get; init; }
+    public string? SortBy { get; init; }
+    public bool SortDescending { get; init; }
+}
+
+public class ListUsersQueryValidator : AbstractValidator<ListUsersQuery>
+{
+    public ListUsersQueryValidator()
+    {
+        RuleFor(x => x.PageNumber)
+            .GreaterThan(0).WithMessage("Page number must be greater than 0");
+
+        RuleFor(x => x.PageSize)
+            .GreaterThan(0).WithMessage("Page size must be greater than 0")
+            .LessThanOrEqualTo(100).WithMessage("Page size must not exceed 100");
+    }
+}
+
+public class ListUsersQueryHandler 
+    : IRequestHandler<ListUsersQuery, Result<PagedResult<UserResponse>>>
+{
+    private readonly IUserRepository _userRepository;
+    private readonly ILogger<ListUsersQueryHandler> _logger;
+    private readonly IMapper _mapper;
+
+    public ListUsersQueryHandler(
+        IUserRepository userRepository,
+        ILogger<ListUsersQueryHandler> logger,
+        IMapper mapper)
+    {
+        _userRepository = userRepository;
+        _logger = logger;
+        _mapper = mapper;
+    }
+
+    public async Task<Result<PagedResult<UserResponse>>> Handle(
+        ListUsersQuery request,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogInformation(
+            "Listing users - Page: {PageNumber}, Size: {PageSize}",
+            request.PageNumber,
+            request.PageSize);
+
+        // Construir filtro
+        Expression<Func<User, bool>>? filter = null;
+        if (!string.IsNullOrWhiteSpace(request.SearchTerm))
+        {
+            var searchTerm = request.SearchTerm.ToLower();
+            filter = u => u.FirstName.ToLower().Contains(searchTerm) ||
+                         u.LastName.ToLower().Contains(searchTerm) ||
+                         u.Email.ToLower().Contains(searchTerm);
+        }
+
+        // Buscar paginado
+        var pagedUsers = await _userRepository.PagedAsync(
+            filter,
+            request.PageNumber,
+            request.PageSize,
+            cancellationToken);
+
+        // Mapear
+        var userResponses = _mapper.Map<List<UserResponse>>(pagedUsers.Items);
+
+        var result = new PagedResult<UserResponse>(
+            userResponses,
+            pagedUsers.Total,
+            pagedUsers.Page,
+            pagedUsers.PageSize);
+
+        return Result<PagedResult<UserResponse>>.Success(result);
+    }
+}
+```
+
+### 3.3. Search Query Complexa
+
+```csharp
+// ✅ CORRETO - Search query com múltiplos filtros
+
+namespace Company.Product.Application.Users.Queries.SearchUsers;
+
+public record SearchUsersQuery : IRequest<Result<List<UserResponse>>>
+{
+    public string? FirstName { get; init; }
+    public string? LastName { get; init; }
+    public string? Email { get; init; }
+    public DateTime? CreatedAfter { get; init; }
+    public DateTime? CreatedBefore { get; init; }
+    public bool? IsActive { get; init; }
+}
+
+public class SearchUsersQueryHandler 
+    : IRequestHandler<SearchUsersQuery, Result<List<UserResponse>>>
+{
+    private readonly IUserRepository _userRepository;
+    private readonly ILogger<SearchUsersQueryHandler> _logger;
+    private readonly IMapper _mapper;
+
+    public SearchUsersQueryHandler(
+        IUserRepository userRepository,
+        ILogger<SearchUsersQueryHandler> logger,
+        IMapper mapper)
+    {
+        _userRepository = userRepository;
+        _logger = logger;
+        _mapper = mapper;
+    }
+
+    public async Task<Result<List<UserResponse>>> Handle(
+        SearchUsersQuery request,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Searching users with filters");
+
+        // Construir expressão de filtro dinâmica
+        var predicate = PredicateBuilder.True<User>();
+
+        if (!string.IsNullOrWhiteSpace(request.FirstName))
+        {
+            predicate = predicate.And(u => u.FirstName.Contains(request.FirstName));
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.LastName))
+        {
+            predicate = predicate.And(u => u.LastName.Contains(request.LastName));
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Email))
+        {
+            predicate = predicate.And(u => u.Email.Contains(request.Email));
+        }
+
+        if (request.CreatedAfter.HasValue)
+        {
+            predicate = predicate.And(u => u.CreatedAt >= request.CreatedAfter.Value);
+        }
+
+        if (request.CreatedBefore.HasValue)
+        {
+            predicate = predicate.And(u => u.CreatedAt <= request.CreatedBefore.Value);
+        }
+
+        if (request.IsActive.HasValue)
+        {
+            predicate = predicate.And(u => u.IsActive == request.IsActive.Value);
+        }
+
+        var users = await _userRepository.FindAsync(predicate, cancellationToken);
+        var responses = _mapper.Map<List<UserResponse>>(users);
+
+        return Result<List<UserResponse>>.Success(responses);
+    }
+}
+```
+
+---
+
+## 4. 🎁 Result Pattern
+
+### 4.1. Result Class
+
+```csharp
+// ✅ CORRETO - Result pattern para retorno tipado
+
+public class Result<T>
+{
+    public bool IsSuccess { get; }
+    public bool IsFailure => !IsSuccess;
+    public T? Value { get; }
+    public string? Error { get; }
+    public List<string> Errors { get; } = new();
+
+    private Result(bool isSuccess, T? value, string? error, List<string>? errors = null)
+    {
+        IsSuccess = isSuccess;
+        Value = value;
+        Error = error;
+        if (errors != null)
+        {
+            Errors = errors;
+        }
+    }
+
+    public static Result<T> Success(T value) => new(true, value, null);
+
+    public static Result<T> Failure(string error) => new(false, default, error);
+
+    public static Result<T> Failure(List<string> errors) => new(false, default, null, errors);
+
+    // Método auxiliar para mapear
+    public Result<TNew> Map<TNew>(Func<T, TNew> mapper)
+    {
+        if (IsFailure)
+        {
+            return Result<TNew>.Failure(Error ?? string.Empty);
+        }
+
+        return Result<TNew>.Success(mapper(Value!));
+    }
+
+    // Método auxiliar para bind
+    public async Task<Result<TNew>> BindAsync<TNew>(Func<T, Task<Result<TNew>>> binder)
+    {
+        if (IsFailure)
+        {
+            return Result<TNew>.Failure(Error ?? string.Empty);
+        }
+
+        return await binder(Value!);
+    }
+}
+
+// Result sem valor (para operações void)
+public class Result
+{
+    public bool IsSuccess { get; }
+    public bool IsFailure => !IsSuccess;
+    public string? Error { get; }
+    public List<string> Errors { get; } = new();
+
+    private Result(bool isSuccess, string? error, List<string>? errors = null)
+    {
+        IsSuccess = isSuccess;
+        Error = error;
+        if (errors != null)
+        {
+            Errors = errors;
+        }
+    }
+
+    public static Result Success() => new(true, null);
+
+    public static Result Failure(string error) => new(false, error);
+
+    public static Result Failure(List<string> errors) => new(false, null, errors);
+}
+```
+
+---
+
+## 5. 🔄 MediatR Pipeline Behaviors
+
+### 5.1. Validation Behavior
+
+```csharp
+// ✅ CORRETO - Behavior para validação automática
+
+public class ValidationBehavior<TRequest, TResponse> 
+    : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : IRequest<TResponse>
+{
+    private readonly IEnumerable<IValidator<TRequest>> _validators;
+    private readonly ILogger<ValidationBehavior<TRequest, TResponse>> _logger;
+
+    public ValidationBehavior(
+        IEnumerable<IValidator<TRequest>> validators,
+        ILogger<ValidationBehavior<TRequest, TResponse>> logger)
+    {
+        _validators = validators;
+        _logger = logger;
+    }
+
+    public async Task<TResponse> Handle(
+        TRequest request,
+        RequestHandlerDelegate<TResponse> next,
+        CancellationToken cancellationToken)
+    {
+        if (!_validators.Any())
+        {
+            return await next();
+        }
+
+        _logger.LogDebug("Validating request {RequestType}", typeof(TRequest).Name);
+
+        var context = new ValidationContext<TRequest>(request);
+
+        var validationResults = await Task.WhenAll(
+            _validators.Select(v => v.ValidateAsync(context, cancellationToken)));
+
+        var failures = validationResults
+            .SelectMany(r => r.Errors)
+            .Where(f => f != null)
+            .ToList();
+
+        if (failures.Any())
+        {
+            var errors = failures
+                .Select(f => f.ErrorMessage)
+                .ToList();
+
+            _logger.LogWarning(
+                "Validation failed for {RequestType}: {Errors}",
+                typeof(TRequest).Name,
+                string.Join(", ", errors));
+
+            // Se TResponse for Result<T>, retornar failure
+            if (typeof(TResponse).IsGenericType &&
+                typeof(TResponse).GetGenericTypeDefinition() == typeof(Result<>))
+            {
+                var resultType = typeof(TResponse).GetGenericArguments()[0];
+                var failureMethod = typeof(Result<>)
+                    .MakeGenericType(resultType)
+                    .GetMethod(nameof(Result<object>.Failure), new[] { typeof(List<string>) });
+
+                var result = failureMethod?.Invoke(null, new object[] { errors });
+                return (TResponse)result!;
+            }
+
+            throw new FluentValidation.ValidationException(failures);
+        }
+
+        return await next();
+    }
+}
+```
+
+### 5.2. Logging Behavior
+
+```csharp
+// ✅ CORRETO - Behavior para logging
+
+public class LoggingBehavior<TRequest, TResponse> 
+    : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : IRequest<TResponse>
+{
+    private readonly ILogger<LoggingBehavior<TRequest, TResponse>> _logger;
+
+    public LoggingBehavior(ILogger<LoggingBehavior<TRequest, TResponse>> logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task<TResponse> Handle(
+        TRequest request,
+        RequestHandlerDelegate<TResponse> next,
+        CancellationToken cancellationToken)
+    {
+        var requestName = typeof(TRequest).Name;
+
+        _logger.LogInformation(
+            "Handling {RequestName}: {@Request}",
+            requestName,
+            request);
+
+        var stopwatch = Stopwatch.StartNew();
+
+        try
+        {
+            var response = await next();
+
+            stopwatch.Stop();
+
+            _logger.LogInformation(
+                "Handled {RequestName} in {ElapsedMs}ms",
+                requestName,
+                stopwatch.ElapsedMilliseconds);
+
+            return response;
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+
+            _logger.LogError(
+                ex,
+                "Error handling {RequestName} after {ElapsedMs}ms",
+                requestName,
+                stopwatch.ElapsedMilliseconds);
+
+            throw;
+        }
+    }
+}
+```
+
+### 5.3. Transaction Behavior
+
+```csharp
+// ✅ CORRETO - Behavior para transações automáticas
+
+public class TransactionBehavior<TRequest, TResponse> 
+    : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : IRequest<TResponse>
+{
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly ILogger<TransactionBehavior<TRequest, TResponse>> _logger;
+
+    public TransactionBehavior(
+        IUnitOfWork unitOfWork,
+        ILogger<TransactionBehavior<TRequest, TResponse>> logger)
+    {
+        _unitOfWork = unitOfWork;
+        _logger = logger;
+    }
+
+    public async Task<TResponse> Handle(
+        TRequest request,
+        RequestHandlerDelegate<TResponse> next,
+        CancellationToken cancellationToken)
+    {
+        // Apenas para Commands (não Queries)
+        var isCommand = typeof(TRequest).Name.EndsWith("Command");
+
+        if (!isCommand)
+        {
+            return await next();
+        }
+
+        _logger.LogDebug("Beginning transaction for {RequestName}", typeof(TRequest).Name);
+
+        await using var transaction = await _unitOfWork.BeginTransactionAsync(cancellationToken);
+
+        try
+        {
+            var response = await next();
+
+            await transaction.CommitAsync(cancellationToken);
+
+            _logger.LogDebug("Committed transaction for {RequestName}", typeof(TRequest).Name);
+
+            return response;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Error during transaction for {RequestName}. Rolling back.",
+                typeof(TRequest).Name);
+
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+}
+```
+
+---
+
+## 6. 🎮 Controller Integration
+
+### 6.1. Thin Controllers
+
+```csharp
+// ✅ CORRETO - Controller fino usando MediatR
+
+[ApiController]
+[Route("api/[controller]")]
+public class UsersController : ControllerBase
+{
+    private readonly IMediator _mediator;
+    private readonly ILogger<UsersController> _logger;
+
+    public UsersController(IMediator mediator, ILogger<UsersController> logger)
+    {
+        _mediator = mediator;
+        _logger = logger;
+    }
+
+    [HttpGet("{id:guid}")]
+    [ProducesResponseType(typeof(UserResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetById(Guid id, CancellationToken cancellationToken)
+    {
+        var query = new GetUserQuery(id);
+        var result = await _mediator.Send(query, cancellationToken);
+
+        return result.IsSuccess
+            ? Ok(result.Value)
+            : NotFound(new { error = result.Error });
+    }
+
+    [HttpGet]
+    [ProducesResponseType(typeof(PagedResult<UserResponse>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> List(
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 10,
+        [FromQuery] string? searchTerm = null,
+        CancellationToken cancellationToken = default)
+    {
+        var query = new ListUsersQuery
+        {
+            PageNumber = pageNumber,
+            PageSize = pageSize,
+            SearchTerm = searchTerm
+        };
+
+        var result = await _mediator.Send(query, cancellationToken);
+
+        return result.IsSuccess
+            ? Ok(result.Value)
+            : BadRequest(new { error = result.Error });
+    }
+
+    [HttpPost]
+    [ProducesResponseType(typeof(UserResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> Create(
+        [FromBody] CreateUserCommand command,
+        CancellationToken cancellationToken)
+    {
+        var result = await _mediator.Send(command, cancellationToken);
+
+        return result.IsSuccess
+            ? CreatedAtAction(nameof(GetById), new { id = result.Value!.Id }, result.Value)
+            : BadRequest(new { error = result.Error, errors = result.Errors });
+    }
+
+    [HttpPut("{id:guid}")]
+    [ProducesResponseType(typeof(UserResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> Update(
+        Guid id,
+        [FromBody] UpdateUserCommand command,
+        CancellationToken cancellationToken)
+    {
+        // Ensure ID from route matches command
+        if (id != command.Id)
+        {
+            return BadRequest(new { error = "ID mismatch" });
+        }
+
+        var result = await _mediator.Send(command, cancellationToken);
+
+        if (result.IsFailure)
+        {
+            return result.Error?.Contains("not found") == true
+                ? NotFound(new { error = result.Error })
+                : BadRequest(new { error = result.Error, errors = result.Errors });
+        }
+
+        return Ok(result.Value);
+    }
+
+    [HttpDelete("{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
+    {
+        var command = new DeleteUserCommand(id);
+        var result = await _mediator.Send(command, cancellationToken);
+
+        if (result.IsFailure)
+        {
+            return result.Error?.Contains("not found") == true
+                ? NotFound(new { error = result.Error })
+                : BadRequest(new { error = result.Error });
+        }
+
+        return NoContent();
+    }
+}
+```
+
+---
+
+## 7. ⚙️ Dependency Injection Setup
+
+### 7.1. MediatR e Behaviors Registration
+
+```csharp
+// ✅ CORRETO - Registro de MediatR e behaviors
+
+public static class DependencyInjection
+{
+    public static IServiceCollection AddApplication(this IServiceCollection services)
+    {
+        // MediatR
+        services.AddMediatR(cfg =>
+        {
+            cfg.RegisterServicesFromAssembly(Assembly.GetExecutingAssembly());
+
+            // Behaviors (ordem importa!)
+            cfg.AddBehavior(typeof(IPipelineBehavior<,>), typeof(LoggingBehavior<,>));
+            cfg.AddBehavior(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
+            cfg.AddBehavior(typeof(IPipelineBehavior<,>), typeof(TransactionBehavior<,>));
+        });
+
+        // FluentValidation
+        services.AddValidatorsFromAssembly(Assembly.GetExecutingAssembly());
+
+        // AutoMapper
+        services.AddAutoMapper(Assembly.GetExecutingAssembly());
+
+        return services;
+    }
+}
+
+// Program.cs ou Startup.cs
+public class Program
+{
+    public static void Main(string[] args)
+    {
+        var builder = WebApplication.CreateBuilder(args);
+
+        // Add services
+        builder.Services.AddApplication();  // MediatR + Validators
+        builder.Services.AddInfrastructure(builder.Configuration);  // Repositories + UoW
+
+        builder.Services.AddControllers();
+
+        var app = builder.Build();
+
+        app.MapControllers();
+        app.Run();
+    }
+}
+```
+
+---
+
+## 8. ✅ Testing Use Cases
+
+### 8.1. Handler Unit Tests
+
+```csharp
+// ✅ CORRETO - Teste unitário de handler
+
+public class CreateUserCommandHandlerTests
+{
+    private readonly Mock<IUserRepository> _userRepositoryMock;
+    private readonly Mock<IUnitOfWork> _unitOfWorkMock;
+    private readonly Mock<ILogger<CreateUserCommandHandler>> _loggerMock;
+    private readonly Mock<IMapper> _mapperMock;
+    private readonly CreateUserCommandHandler _handler;
+
+    public CreateUserCommandHandlerTests()
+    {
+        _userRepositoryMock = new Mock<IUserRepository>();
+        _unitOfWorkMock = new Mock<IUnitOfWork>();
+        _loggerMock = new Mock<ILogger<CreateUserCommandHandler>>();
+        _mapperMock = new Mock<IMapper>();
+
+        _handler = new CreateUserCommandHandler(
+            _userRepositoryMock.Object,
+            _unitOfWorkMock.Object,
+            _loggerMock.Object,
+            _mapperMock.Object);
+    }
+
+    [Fact]
+    public async Task Handle_ValidCommand_ReturnsSuccessResult()
+    {
+        // Arrange
+        var command = new CreateUserCommand
+        {
+            FirstName = "John",
+            LastName = "Doe",
+            Email = "john.doe@example.com",
+            DateOfBirth = new DateTime(1990, 1, 1)
+        };
+
+        _userRepositoryMock
+            .Setup(r => r.ExistsAsync(It.IsAny<Expression<Func<User, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        var expectedResponse = new UserResponse
+        {
+            Id = Guid.NewGuid(),
+            FirstName = command.FirstName,
+            LastName = command.LastName,
+            Email = command.Email
+        };
+
+        _mapperMock
+            .Setup(m => m.Map<UserResponse>(It.IsAny<User>()))
+            .Returns(expectedResponse);
+
+        // Act
+        var result = await _handler.Handle(command, CancellationToken.None);
+
+        // Assert
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(result.Value);
+        Assert.Equal(command.Email, result.Value.Email);
+
+        _userRepositoryMock.Verify(
+            r => r.AddAsync(It.IsAny<User>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        _unitOfWorkMock.Verify(
+            u => u.SaveChangesAsync(It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task Handle_DuplicateEmail_ReturnsFailureResult()
+    {
+        // Arrange
+        var command = new CreateUserCommand
+        {
+            FirstName = "John",
+            LastName = "Doe",
+            Email = "existing@example.com",
+            DateOfBirth = new DateTime(1990, 1, 1)
+        };
+
+        _userRepositoryMock
+            .Setup(r => r.ExistsAsync(It.IsAny<Expression<Func<User, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var result = await _handler.Handle(command, CancellationToken.None);
+
+        // Assert
+        Assert.True(result.IsFailure);
+        Assert.Contains("already exists", result.Error);
+
+        _userRepositoryMock.Verify(
+            r => r.AddAsync(It.IsAny<User>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+
+        _unitOfWorkMock.Verify(
+            u => u.SaveChangesAsync(It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+}
+```
+
+### 8.2. Validator Tests
+
+```csharp
+// ✅ CORRETO - Teste de validator
+
+public class CreateUserCommandValidatorTests
+{
+    private readonly CreateUserCommandValidator _validator;
+
+    public CreateUserCommandValidatorTests()
+    {
+        _validator = new CreateUserCommandValidator();
+    }
+
+    [Fact]
+    public async Task Validate_ValidCommand_ReturnsValid()
+    {
+        // Arrange
+        var command = new CreateUserCommand
+        {
+            FirstName = "John",
+            LastName = "Doe",
+            Email = "john.doe@example.com",
+            DateOfBirth = new DateTime(1990, 1, 1)
+        };
+
+        // Act
+        var result = await _validator.ValidateAsync(command);
+
+        // Assert
+        Assert.True(result.IsValid);
+    }
+
+    [Theory]
+    [InlineData("", "Doe", "john@example.com")]  // Empty FirstName
+    [InlineData("John", "", "john@example.com")]  // Empty LastName
+    [InlineData("John", "Doe", "")]  // Empty Email
+    [InlineData("John", "Doe", "invalid-email")]  // Invalid Email
+    public async Task Validate_InvalidCommand_ReturnsInvalid(
+        string firstName,
+        string lastName,
+        string email)
+    {
+        // Arrange
+        var command = new CreateUserCommand
+        {
+            FirstName = firstName,
+            LastName = lastName,
+            Email = email,
+            DateOfBirth = new DateTime(1990, 1, 1)
+        };
+
+        // Act
+        var result = await _validator.ValidateAsync(command);
+
+        // Assert
+        Assert.False(result.IsValid);
+        Assert.NotEmpty(result.Errors);
+    }
+}
+```
+
+---
+
+## 9. 📋 Use Cases Best Practices Checklist
+
+### Commands
+- [ ] Commands são records imutáveis (`record` + `init`)
+- [ ] Commands implementam `IRequest<Result<T>>` ou `IRequest<Result<Unit>>`
+- [ ] Cada command tem seu validator (FluentValidation)
+- [ ] Handlers retornam `Result<T>` para comunicar sucesso/falha
+- [ ] Handlers validam regras de negócio antes de persistir
+- [ ] Handlers usam Unit of Work para transações
+- [ ] Handlers loggam operações importantes
+
+### Queries
+- [ ] Queries são records imutáveis
+- [ ] Queries implementam `IRequest<Result<T>>`
+- [ ] Queries não modificam estado
+- [ ] Queries retornam DTOs/ViewModels (nunca entidades)
+- [ ] Queries com paginação têm validação de PageNumber/PageSize
+- [ ] Queries complexas usam PredicateBuilder para filtros dinâmicos
+
+### Handlers
+- [ ] Um handler por use case (SRP)
+- [ ] Handlers recebem dependências via constructor
+- [ ] Handlers usam CancellationToken
+- [ ] Handlers loggam início e fim de operações
+- [ ] Handlers mapeiam entidades para DTOs (AutoMapper)
+- [ ] Handlers não lançam exceções para falhas de negócio (usar Result)
+
+### Result Pattern
+- [ ] Usar `Result<T>` para operações que podem falhar
+- [ ] Usar `Result<Unit>` para commands sem retorno
+- [ ] Validações retornam `Failure` (não exceções)
+- [ ] Entidades não encontradas retornam `Failure`
+- [ ] Sucesso sempre contém valor tipado
+
+### Pipeline Behaviors
+- [ ] ValidationBehavior registrado antes dos handlers
+- [ ] LoggingBehavior registrado para auditoria
+- [ ] TransactionBehavior apenas para Commands
+- [ ] Ordem dos behaviors é importante
+
+### Controllers
+- [ ] Controllers finos (thin controllers)
+- [ ] Controllers apenas enviam commands/queries via MediatR
+- [ ] Controllers mapeiam Result para HTTP status codes
+- [ ] Controllers usam CancellationToken do request
+- [ ] Controllers têm ProducesResponseType para documentação
+
+### Testing
+- [ ] Handlers têm testes unitários
+- [ ] Validators têm testes unitários
+- [ ] Mocks para repositórios e dependências externas
+- [ ] Testes cobrem cenários de sucesso e falha
+- [ ] Testes de integração com MediatR pipeline completo
+
+---
+
+**Última atualização**: Fevereiro 2026  
+**Versão do documento**: 1.0.0  
+**Autor**: Glauber Duma

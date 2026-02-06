@@ -2,7 +2,7 @@
 Rule: desktop-blazor-complete-auth-observability.mdc
 Description: Padroes para desktop Blazor Hybrid completo com autenticacao (OIDC/PKCE), observabilidade e offline.
 globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/*.razor"]
-rules: @csharp-style-guide
+rules: @csharp-style-guide, @entity-validator, @efcore-repository, @dapper-repository, @fluentvalidation, @use-cases, @unit-testing, @observability
 alwaysApply: false
 tags: ["csharp", "desktop", "blazor", "auth", "observability", "offline"]
 Author: Glauber Duma
@@ -78,25 +78,46 @@ return builder.Build();
 ```
 
 ## 5) Observabilidade
-- Logs estruturados para login/logout, refresh e sync (sem armazenar tokens).
-- Traces de chamadas HTTP autenticadas; spans manuais para etapas de sync e reenvio de fila.
-- Metrics: tamanho da fila offline, taxas de sucesso/erro, tempo de refresh.
+Para padrões completos de observabilidade (Serilog com logs estruturados, OpenTelemetry com traces e metrics, Health Checks), consulte `@observability`.
 
-## 6) Seguranca e autorizacao
+**Especificidades deste projeto**:
+- Logs de login/logout/refresh (SEM armazenar tokens)
+- Custom spans para sync e reenvio de fila offline
+- Custom metrics: tamanho da fila offline, taxas de sucesso/erro, tempo de refresh de token
+- Health checks NÃO se aplicam (aplicação desktop)
+
+## 6) Entidades e Validadores
+Para padronizar entidades e validadores, utilize as regras compartilhadas:
+- `@entity-validator` - Entidades EF Core com setters privados e validação
+- `@fluentvalidation` - Validadores FluentValidation
+
+## 7) Repositórios
+Para padronizar repositórios, utilize as regras compartilhadas:
+- `@efcore-repository` - Repositório genérico EF Core
+- `@dapper-repository` - Repositório Dapper para aplicações simples
+
+## 9) Seguranca e autorizacao
 - PKCE e refresh tokens; armazenamento seguro (SecureStorage/Keychain) e limpeza segura no logout.
 - Policies locais para habilitar/desabilitar telas conforme claims/roles.
 - Lockout e limitação de tentativas no provedor de identidade quando aplicavel.
 
-## 7) Offline e sincronizacao
+## 10) Offline e sincronizacao
 - Fila local para comandos quando offline, com deduplicacao.
 - Reenvio da fila com retry exponencial e backoff; cancelar ao perder token.
 - Cache local para leituras com expiracao e invalidacao quando eventos de write ocorrerem.
 
-## 8) Testes
+## 11) Testes
+Para padrões de testes (xUnit, Moq, FluentAssertions, Bogus, Testcontainers, cobertura), consulte `@unit-testing`.
+
+**Especificidades deste projeto**:
 - Unit: auth flow (PKCE), state containers, filas offline.
 - Integration: alternando online/offline, renovacao de token e reenvio da fila; API mockada.
 
-## 9) Checklist
-- Autenticacao OIDC/PKCE configurada com armazenamento seguro.
+## 12) Checklist
+- Entidades conforme `entity-validator.mdc`.
+- Repositório genérico conforme `efcore-repository.mdc`.
+- Repositório Dapper conforme `dapper-repository.mdc` (se aplicável).
+- Validadores conforme `fluentvalidation.mdc`.
+- Autenticação OIDC/PKCE configurada com armazenamento seguro.
 - Observabilidade cobrindo auth e sync.
-- Offline/queue e cache local implementados e testados.
+- Testes conforme `@unit-testing`: cobertura unit e integration em offline/queue e auth.

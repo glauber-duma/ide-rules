@@ -2,7 +2,7 @@
 Rule: desktop-blazor-simple-auth-observability.mdc
 Description: Padroes para desktop Blazor Hybrid simples com autenticacao (OIDC/PKCE) e observabilidade.
 globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/*.razor"]
-rules: @csharp-style-guide
+rules: @csharp-style-guide, @entity-validator, @efcore-repository, @dapper-repository, @fluentvalidation, @use-cases, @unit-testing, @observability
 alwaysApply: false
 tags: ["csharp", "desktop", "blazor", "auth", "observability"]
 Author: Glauber Duma
@@ -67,21 +67,42 @@ return builder.Build();
 ```
 
 ## 5) Observabilidade
-- Logs estruturados de login/logout (sem tokens).
-- Traces de chamadas HTTP autenticadas; propague Authorization nos HttpClient.
+Para padrões completos de observabilidade (Serilog com logs estruturados, OpenTelemetry com traces e metrics, Health Checks), consulte `@observability`.
 
-## 6) Seguranca e autorizacao
+**Especificidades deste projeto**:
+- Logs de login/logout (SEM tokens ou senhas)
+- Traces de chamadas HTTP autenticadas
+- Propagar header Authorization nos HttpClient traces
+- Health checks NÃO se aplicam (aplicação desktop)
+
+## 6) Entidades (EF Core) com validação
+Para padronizar entidades EF Core com setters privados, construtores validados e métodos de mutação que revalidam, utilize a rule compartilhada `entity-validator.mdc`. Ela centraliza o snippet e as orientações para consistência entre projetos.
+
+## 7) Repositório genérico (EF Core)
+Para padronizar o repositório genérico EF Core, utilize a rule compartilhada `efcore-repository.mdc`. Ela centraliza o contrato, implementação, DTO de paginação e orientações de uso.
+
+## 8) Repositório genérico (Dapper) para aplicações simples
+Para padronizar o repositório Dapper para cenários simples, utilize a rule compartilhada `dapper-repository.mdc`. Ela centraliza o contrato, implementação e orientações para uso plugável.
+
+## 9) Seguranca e autorizacao
 - PKCE obrigatorio; tokens armazenados de forma segura (SecureStorage/Keychain).
 - Renovacao de tokens com refresh quando suportado.
 
-## 7) Offline/cache
+## 10) Offline/cache
 - Cache local para dados lidos; fila local opcional para comandos simples.
 
-## 8) Testes
+## 11) Testes
+Para padrões de testes (xUnit, Moq, FluentAssertions, Bogus, Testcontainers, cobertura), consulte `@unit-testing`.
+
+**Especificidades deste projeto**:
 - Unit: auth service (fluxo PKCE) mockando navegador; state management.
 - Integration: chamadas HTTP autenticadas contra API mockada.
 
-## 9) Checklist
+## 12) Checklist
+- Entidades conforme `entity-validator.mdc`.
+- Repositório genérico conforme `efcore-repository.mdc`.
+- Repositório Dapper conforme `dapper-repository.mdc` (se aplicável).
+- Validadores conforme `fluentvalidation.mdc`.
 - OIDC/PKCE configurado e seguro.
 - Observabilidade ativa (logs + traces) sem expor segredos.
-- Cache/offline basico e testes de auth executados.
+- Testes conforme `@unit-testing`: cobertura unit e integration no fluxo de auth.

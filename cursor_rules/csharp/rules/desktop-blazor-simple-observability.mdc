@@ -2,7 +2,7 @@
 Rule: desktop-blazor-simple-observability.mdc
 Description: Padroes para desktop Blazor Hybrid simples com observabilidade.
 globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/*.razor"]
-rules: @csharp-style-guide
+rules: @csharp-style-guide, @entity-validator, @efcore-repository, @dapper-repository, @fluentvalidation, @use-cases, @unit-testing, @observability
 alwaysApply: false
 tags: ["csharp", "desktop", "blazor", "observability"]
 Author: Glauber Duma
@@ -58,19 +58,39 @@ return builder.Build();
 ```
 
 ## 5) Observabilidade
-- Logs estruturados (UI e services) enviados ao console.
-- Traces de chamadas HTTP para APIs.
-- Capturar excecoes globais e registrar com correlation id local.
+Para padrões completos de observabilidade (Serilog com logs estruturados, OpenTelemetry com traces e metrics, Health Checks), consulte `@observability`.
 
-## 6) Offline/cache
+**Especificidades deste projeto**:
+- Logs estruturados (UI e services) enviados ao console
+- Traces de chamadas HTTP para APIs backend
+- Capturar exceções globais com correlation id local
+- Health checks NÃO se aplicam (aplicação desktop)
+
+## 6) Entidades (EF Core) com validação
+Para padronizar entidades EF Core com setters privados, construtores validados e métodos de mutação que revalidam, utilize a rule compartilhada `entity-validator.mdc`. Ela centraliza o snippet e as orientações para consistência entre projetos.
+
+## 7) Repositório genérico (EF Core)
+Para padronizar o repositório genérico EF Core, utilize a rule compartilhada `efcore-repository.mdc`. Ela centraliza o contrato, implementação, DTO de paginação e orientações de uso.
+
+## 8) Repositório genérico (Dapper) para aplicações simples
+Para padronizar o repositório Dapper para cenários simples, utilize a rule compartilhada `dapper-repository.mdc`. Ela centraliza o contrato, implementação e orientações para uso plugável.
+
+## 9) Offline/cache
 - Cache local (Preferences/SQLite) para dados lidos.
 - Estrategia cache-first com expiracao simples.
 
-## 7) Testes
+## 10) Testes
+Para padrões de testes (xUnit, Moq, FluentAssertions, Bogus, Testcontainers, cobertura), consulte `@unit-testing`.
+
+**Especificidades deste projeto**:
 - Unit: state management e services.
 - Integration: chamadas HTTP mockadas para validar comportamento offline/online.
 
-## 8) Checklist
+## 11) Checklist
+- Entidades conforme `entity-validator.mdc`.
+- Repositório genérico conforme `efcore-repository.mdc`.
+- Repositório Dapper conforme `dapper-repository.mdc` (se aplicável).
+- Validadores conforme `fluentvalidation.mdc`.
 - Logging e tracing habilitados.
-- Cache/offline basico configurado.
-- Testes unitarios cobrindo state/services.
+- Cache/offline básico configurado.
+- Testes conforme `@unit-testing`: cobertura unit em state/services.

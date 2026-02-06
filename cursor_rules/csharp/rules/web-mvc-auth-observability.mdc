@@ -1,78 +1,8 @@
 ---
 Rule: web-mvc-auth-observability.mdc
-Description: Padroes para aplicacao web MVC com autenticacao, autorizacao e observabilidade.
-globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json"]
-rules: @csharp-style-guide
-alwaysApply: false
-tags: ["csharp", "mvc", "web", "auth", "observability"]
-Author: Glauber Duma
-Created: 2026-02
----
-
-# Web MVC com autenticacao e observabilidade
-
-## 1) Objetivo
-Padronizar projetos ASP.NET Core MVC com autenticacao/autorizacao e observabilidade.
-
-## 2) Estrutura de pastas
-```
-src/
-  Presentation/
-    Controllers/
-    Views/
-    ViewModels/
-    Program.cs
-  Application/
-    Interfaces/
-    Services/
-    DTOs/
-    Validators/
-  Domain/
-    Entities/
-  Infrastructure/
-    Identity/
-    Data/
-      Context/
-      Repositories/
-    Observability/
-  Tests/
-    Unit/
-    Integration/
-```
-
-## 3) Pacotes recomendados
-- Microsoft.AspNetCore.Identity.EntityFrameworkCore
-- Microsoft.AspNetCore.Authentication.Cookies
-- Serilog.AspNetCore
-- OpenTelemetry.Extensions.Hosting
-- MediatR
-- FluentValidation
-- Microsoft.EntityFrameworkCore
-
-## 4) Configuracao (Identity + DI)
-```csharp
-builder.Services.AddAuthentication()
-    .AddCookie();
-
-builder.Services.AddAuthorization(options =>
-{
-    options.AddPolicy("AdminOnly", p => p.RequireRole("Admin"));
-});
-```
-
-## 5) Observabilidade
-- Log de login/logout e falhas.
-- Traces para endpoints criticos.
-
-## 6) Seguranca e autorizacao
-- Use Identity + password hashing.
-- Use policy-based auth em controllers.
-
----
-Rule: web-mvc-auth-observability.mdc
 Description: Padroes para aplicacao web MVC com autenticacao/autorizacao (cookies) e observabilidade.
 globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/Dockerfile"]
-rules: @csharp-style-guide
+rules: @csharp-style-guide, @entity-validator, @efcore-repository, @dapper-repository, @fluentvalidation, @use-cases, @unit-testing, @docker-containers, @observability
 alwaysApply: false
 tags: ["csharp", "mvc", "web", "auth", "observability", "docker"]
 Author: Glauber Duma
@@ -153,7 +83,16 @@ app.MapDefaultControllerRoute();
 app.Run();
 ```
 
-## 5) Exemplo basico de AccountController
+## 5) Entidades (EF Core) com validação
+Para padronizar entidades EF Core com setters privados, construtores validados e métodos de mutação que revalidam, utilize a rule compartilhada `entity-validator.mdc`. Ela centraliza o snippet e as orientações para consistência entre projetos.
+
+## 6) Repositório genérico (EF Core)
+Para padronizar o repositório genérico EF Core, utilize a rule compartilhada `efcore-repository.mdc`. Ela centraliza o contrato, implementação, DTO de paginação e orientações de uso.
+
+## 7) Repositório genérico (Dapper) para aplicações simples
+Para padronizar o repositório Dapper para cenários simples, utilize a rule compartilhada `dapper-repository.mdc`. Ela centraliza o contrato, implementação e orientações para uso plugável.
+
+## 8) Exemplo basico de AccountController
 ```csharp
 [AllowAnonymous]
 public class AccountController : Controller
@@ -172,16 +111,22 @@ public class AccountController : Controller
 }
 ```
 
-## 6) Observabilidade
-- Logs estruturados com usuario/tenant (sem dados sensiveis), traceId e correlation id.
-- Traces e metrics via OpenTelemetry; exporter OTLP.
-- Health checks protegidos por autorizacao quando publico.
+## 9) Observabilidade
+Para padrões completos de observabilidade (Serilog com logs estruturados, OpenTelemetry com traces e metrics, Health Checks), consulte `@observability`.
 
-## 7) Testes
+**Especificidades deste projeto**:
+- Logs incluem userId/tenant (SEM dados sensíveis) quando autenticado
+- Traces incluem rotas MVC + autenticação
+- Health checks podem ser protegidos com `[Authorize]` conforme necessidade
+
+## 10) Testes
+Para padrões de testes (xUnit, Moq, FluentAssertions, Bogus, Testcontainers, cobertura), consulte `@unit-testing`.
+
+**Especificidades deste projeto**:
 - Unit: services, validators, regras de autorizacao (policies).
 - Integration: login/logout e rotas protegidas com WebApplicationFactory + Identity store em memoria/SQLite.
 
-## 8) Dockerfile (opcional para deploy)
+## 11) Dockerfile (opcional para deploy)
 ```Dockerfile
 FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
 WORKDIR /app
@@ -198,7 +143,11 @@ COPY --from=build /app/publish .
 ENTRYPOINT ["dotnet", "Presentation.dll"]
 ```
 
-## 9) Checklist
+## 12) Checklist
+- Entidades conforme `entity-validator.mdc`.
+- Repositório genérico conforme `efcore-repository.mdc`.
+- Repositório Dapper conforme `dapper-repository.mdc` (se aplicável).
+- Validadores conforme `fluentvalidation.mdc`.
 - Identity + cookies configurados (login, lockout, policies).
 - Observabilidade ativa (logs + traces + metrics + healthcheck).
-- Testes cobrindo autenticacao e rotas protegidas.
+- Testes conforme `@unit-testing`: cobertura unit e integration em autenticação e rotas protegidas.

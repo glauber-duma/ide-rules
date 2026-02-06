@@ -1,0 +1,952 @@
+---
+Rule: api-controllers.mdc
+Description: Padroes para controllers de API REST, incluindo BaseController, Result Pattern, Problem Details (RFC 7807), paginacao, versionamento e boas praticas.
+globs: ["**/*Controller.cs", "**/Controllers/**/*.cs", "**/Program.cs"]
+rules: @csharp-style-guide, @use-cases
+alwaysApply: false
+tags: ["csharp", "api", "controllers", "rest", "problem-details", "result-pattern"]
+Author: Glauber Duma
+Created: 2026-02
+Version: 1.0.0
+---
+
+# API Controllers - Padrões REST
+
+## 1. 🎯 Princípios Fundamentais
+
+### Controllers devem ser THIN (magros)
+- **NUNCA** coloque lógica de negócio em controllers
+- Controllers apenas orquestram: recebem requests → delegam para use cases (MediatR) → retornam responses
+- Use `BaseApiController` para padronizar tratamento de resultados
+
+### Result Pattern é OBRIGATÓRIO
+- Use cases retornam `Result<T>` ou `Result`
+- Controllers convertem `Result` em `IActionResult` com status codes corretos
+- NUNCA use exceptions para flow control
+
+### Problem Details (RFC 7807) para erros
+- Todos os erros devem retornar `ProblemDetails` padronizado
+- Inclua `traceId` para correlação com logs
+- Valide automaticamente ModelState
+
+---
+
+## 2. 📦 BaseApiController
+
+### 2.1. Implementação Base
+
+```csharp
+using Microsoft.AspNetCore.Mvc;
+
+namespace Api.Controllers;
+
+[ApiController]
+[Route("api/[controller]")]
+[Produces("application/json")]
+public abstract class BaseApiController : ControllerBase
+{
+    /// <summary>
+    /// Converte Result<T> em IActionResult apropriado
+    /// </summary>
+    protected IActionResult HandleResult<T>(Result<T> result)
+    {
+        if (result.IsSuccess)
+        {
+            return result.Value is null 
+                ? NoContent() 
+                : Ok(result.Value);
+        }
+
+        return HandleError(result.Error);
+    }
+
+    /// <summary>
+    /// Converte Result (sem valor) em IActionResult apropriado
+    /// </summary>
+    protected IActionResult HandleResult(Result result)
+    {
+        if (result.IsSuccess)
+            return NoContent();
+
+        return HandleError(result.Error);
+    }
+
+    /// <summary>
+    /// Retorna CreatedAtAction com Location header correto
+    /// </summary>
+    protected IActionResult CreatedAtActionResult<T>(string actionName, object routeValues, T value)
+        => CreatedAtAction(actionName, routeValues, value);
+
+    /// <summary>
+    /// Converte Error em ProblemDetails apropriado
+    /// </summary>
+    private IActionResult HandleError(Error error)
+    {
+        var statusCode = error.Type switch
+        {
+            ErrorType.Validation => StatusCodes.Status400BadRequest,
+            ErrorType.NotFound => StatusCodes.Status404NotFound,
+            ErrorType.Conflict => StatusCodes.Status409Conflict,
+            ErrorType.Unauthorized => StatusCodes.Status401Unauthorized,
+            ErrorType.Forbidden => StatusCodes.Status403Forbidden,
+            _ => StatusCodes.Status500InternalServerError
+        };
+
+        var problemDetails = new ApiProblemDetails
+        {
+            Type = GetProblemType(error.Type),
+            Title = GetProblemTitle(error.Type),
+            Status = statusCode,
+            Detail = error.Message,
+            Instance = HttpContext.Request.Path,
+            TraceId = HttpContext.TraceIdentifier
+        };
+
+        if (error.Errors?.Length > 0)
+            problemDetails.Errors = error.Errors;
+
+        return StatusCode(statusCode, problemDetails);
+    }
+
+    private static string GetProblemType(ErrorType type) => type switch
+    {
+        ErrorType.Validation => "https://tools.ietf.org/html/rfc7231#section-6.5.1",
+        ErrorType.NotFound => "https://tools.ietf.org/html/rfc7231#section-6.5.4",
+        ErrorType.Conflict => "https://tools.ietf.org/html/rfc7231#section-6.5.8",
+        ErrorType.Unauthorized => "https://tools.ietf.org/html/rfc7235#section-3.1",
+        ErrorType.Forbidden => "https://tools.ietf.org/html/rfc7231#section-6.5.3",
+        _ => "https://tools.ietf.org/html/rfc7231#section-6.6.1"
+    };
+
+    private static string GetProblemTitle(ErrorType type) => type switch
+    {
+        ErrorType.Validation => "One or more validation errors occurred",
+        ErrorType.NotFound => "The specified resource was not found",
+        ErrorType.Conflict => "A conflict occurred",
+        ErrorType.Unauthorized => "Unauthorized",
+        ErrorType.Forbidden => "Forbidden",
+        _ => "An error occurred processing your request"
+    };
+}
+```
+
+### 2.2. ApiProblemDetails (RFC 7807)
+
+```csharp
+using Microsoft.AspNetCore.Mvc;
+
+namespace Api.Models;
+
+/// <summary>
+/// Problem Details padronizado (RFC 7807)
+/// </summary>
+public class ApiProblemDetails : ProblemDetails
+{
+    /// <summary>
+    /// Lista de erros de validação ou mensagens adicionais
+    /// </summary>
+    public IEnumerable<string>? Errors { get; set; }
+
+    /// <summary>
+    /// TraceId para correlação com logs
+    /// </summary>
+    public string? TraceId { get; set; }
+}
+```
+
+---
+
+## 3. 🔄 Result Pattern (Domain Layer)
+
+### 3.1. Result<T> e Result
+
+```csharp
+namespace Domain.Primitives;
+
+public class Result
+{
+    public bool IsSuccess { get; }
+    public Error Error { get; }
+    public bool IsFailure => !IsSuccess;
+
+    protected Result(bool isSuccess, Error error)
+    {
+        if (isSuccess && error != Error.None)
+            throw new InvalidOperationException();
+        if (!isSuccess && error == Error.None)
+            throw new InvalidOperationException();
+
+        IsSuccess = isSuccess;
+        Error = error;
+    }
+
+    public static Result Success() => new(true, Error.None);
+    public static Result Failure(Error error) => new(false, error);
+    
+    public static Result<TValue> Success<TValue>(TValue value) 
+        => new(value, true, Error.None);
+    
+    public static Result<TValue> Failure<TValue>(Error error) 
+        => new(default, false, error);
+}
+
+public class Result<TValue> : Result
+{
+    private readonly TValue? _value;
+
+    protected internal Result(TValue? value, bool isSuccess, Error error)
+        : base(isSuccess, error)
+    {
+        _value = value;
+    }
+
+    public TValue Value => IsSuccess
+        ? _value!
+        : throw new InvalidOperationException("O resultado falhou e não possui valor.");
+}
+```
+
+### 3.2. Error e ErrorType
+
+```csharp
+namespace Domain.Primitives;
+
+public record Error(string Code, string Message, ErrorType Type, string[]? Errors = null)
+{
+    public static readonly Error None = new(string.Empty, string.Empty, ErrorType.None);
+
+    public static Error Validation(string code, string message, params string[] errors)
+        => new(code, message, ErrorType.Validation, errors);
+
+    public static Error NotFound(string code, string message)
+        => new(code, message, ErrorType.NotFound);
+
+    public static Error Conflict(string code, string message)
+        => new(code, message, ErrorType.Conflict);
+
+    public static Error Failure(string code, string message)
+        => new(code, message, ErrorType.Failure);
+
+    public static Error Unauthorized(string code, string message)
+        => new(code, message, ErrorType.Unauthorized);
+
+    public static Error Forbidden(string code, string message)
+        => new(code, message, ErrorType.Forbidden);
+}
+
+public enum ErrorType
+{
+    None,
+    Validation,
+    NotFound,
+    Conflict,
+    Failure,
+    Unauthorized,
+    Forbidden
+}
+```
+
+---
+
+## 4. 📄 Paginação Padronizada
+
+### 4.1. PagedResult<T>
+
+```csharp
+namespace Api.Models;
+
+/// <summary>
+/// Resultado paginado padronizado
+/// </summary>
+public class PagedResult<T>
+{
+    public IReadOnlyList<T> Items { get; init; } = [];
+    public int Page { get; init; }
+    public int PageSize { get; init; }
+    public int TotalCount { get; init; }
+    public int TotalPages => (int)Math.Ceiling(TotalCount / (double)PageSize);
+    public bool HasPrevious => Page > 1;
+    public bool HasNext => Page < TotalPages;
+
+    public static PagedResult<T> Create(IReadOnlyList<T> items, int page, int pageSize, int totalCount)
+        => new()
+        {
+            Items = items,
+            Page = page,
+            PageSize = pageSize,
+            TotalCount = totalCount
+        };
+}
+```
+
+### 4.2. PagedQuery (Base para Queries com Paginação)
+
+```csharp
+namespace Application.Common;
+
+public abstract record PagedQuery : IRequest<Result<PagedResult<T>>>
+{
+    public int Page { get; init; } = 1;
+    public int PageSize { get; init; } = 10;
+
+    public void ValidatePagination()
+    {
+        if (Page < 1)
+            throw new ArgumentException("Page deve ser maior que zero", nameof(Page));
+        
+        if (PageSize < 1 || PageSize > 100)
+            throw new ArgumentException("PageSize deve estar entre 1 e 100", nameof(PageSize));
+    }
+}
+```
+
+---
+
+## 5. 🔢 Versionamento de API
+
+### 5.1. Configuração (Program.cs)
+
+```csharp
+using Asp.Versioning;
+
+builder.Services.AddApiVersioning(options =>
+{
+    options.DefaultApiVersion = new ApiVersion(1, 0);
+    options.AssumeDefaultVersionWhenUnspecified = true;
+    options.ReportApiVersions = true;
+    options.ApiVersionReader = ApiVersionReader.Combine(
+        new UrlSegmentApiVersionReader(),
+        new HeaderApiVersionReader("X-Api-Version")
+    );
+}).AddApiExplorer(options =>
+{
+    options.GroupNameFormat = "'v'VVV";
+    options.SubstituteApiVersionInUrl = true;
+});
+```
+
+### 5.2. Uso em Controller
+
+```csharp
+[ApiVersion("1.0")]
+[ApiVersion("2.0")]
+[Route("api/v{version:apiVersion}/[controller]")]
+public class ProductsController : BaseApiController
+{
+    [HttpGet]
+    [MapToApiVersion("1.0")]
+    public async Task<IActionResult> GetV1([FromQuery] ProductsQuery query)
+    {
+        var result = await Mediator.Send(query);
+        return HandleResult(result);
+    }
+
+    [HttpGet]
+    [MapToApiVersion("2.0")]
+    public async Task<IActionResult> GetV2([FromQuery] ProductsV2Query query)
+    {
+        var result = await Mediator.Send(query);
+        return HandleResult(result);
+    }
+}
+```
+
+---
+
+## 6. ✅ Validação Automática de ModelState
+
+### 6.1. Configuração (Program.cs)
+
+```csharp
+builder.Services.Configure<ApiBehaviorOptions>(options =>
+{
+    options.InvalidModelStateResponseFactory = context =>
+    {
+        var errors = context.ModelState
+            .Where(e => e.Value?.Errors.Count > 0)
+            .SelectMany(e => e.Value!.Errors)
+            .Select(e => e.ErrorMessage)
+            .ToArray();
+
+        var problemDetails = new ApiProblemDetails
+        {
+            Type = "https://tools.ietf.org/html/rfc7231#section-6.5.1",
+            Title = "One or more validation errors occurred",
+            Status = StatusCodes.Status400BadRequest,
+            Detail = "See the errors property for details",
+            Instance = context.HttpContext.Request.Path,
+            TraceId = context.HttpContext.TraceIdentifier,
+            Errors = errors
+        };
+
+        return new BadRequestObjectResult(problemDetails);
+    };
+});
+```
+
+---
+
+## 7. 📝 Exemplos CRUD Completos
+
+### 7.1. GET - Listagem com Paginação
+
+```csharp
+[ApiController]
+[Route("api/[controller]")]
+public class ProductsController(IMediator mediator) : BaseApiController
+{
+    private readonly IMediator _mediator = mediator;
+
+    /// <summary>
+    /// Lista produtos com paginação
+    /// </summary>
+    /// <param name="query">Parâmetros de busca e paginação</param>
+    /// <returns>Lista paginada de produtos</returns>
+    /// <response code="200">Produtos encontrados</response>
+    /// <response code="400">Parâmetros inválidos</response>
+    [HttpGet]
+    [ProducesResponseType(typeof(PagedResult<ProductDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiProblemDetails), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> GetProducts([FromQuery] GetProductsQuery query)
+    {
+        var result = await _mediator.Send(query);
+        return HandleResult(result);
+    }
+}
+```
+
+### 7.2. GET - Busca por ID
+
+```csharp
+/// <summary>
+/// Busca um produto por ID
+/// </summary>
+/// <param name="id">ID do produto</param>
+/// <returns>Produto encontrado</returns>
+/// <response code="200">Produto encontrado</response>
+/// <response code="404">Produto não encontrado</response>
+[HttpGet("{id:guid}", Name = nameof(GetProductById))]
+[ProducesResponseType(typeof(ProductDto), StatusCodes.Status200OK)]
+[ProducesResponseType(typeof(ApiProblemDetails), StatusCodes.Status404NotFound)]
+public async Task<IActionResult> GetProductById(Guid id)
+{
+    var result = await _mediator.Send(new GetProductByIdQuery(id));
+    return HandleResult(result);
+}
+```
+
+### 7.3. POST - Criação com Location Header
+
+```csharp
+/// <summary>
+/// Cria um novo produto
+/// </summary>
+/// <param name="command">Dados do produto</param>
+/// <returns>Produto criado</returns>
+/// <response code="201">Produto criado com sucesso</response>
+/// <response code="400">Dados inválidos</response>
+/// <response code="409">Produto já existe</response>
+[HttpPost]
+[ProducesResponseType(typeof(ProductDto), StatusCodes.Status201Created)]
+[ProducesResponseType(typeof(ApiProblemDetails), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiProblemDetails), StatusCodes.Status409Conflict)]
+public async Task<IActionResult> CreateProduct([FromBody] CreateProductCommand command)
+{
+    var result = await _mediator.Send(command);
+    
+    if (result.IsFailure)
+        return HandleResult(result);
+    
+    return CreatedAtActionResult(
+        nameof(GetProductById),
+        new { id = result.Value.Id },
+        result.Value
+    );
+}
+```
+
+### 7.4. PUT - Atualização Idempotente
+
+```csharp
+/// <summary>
+/// Atualiza um produto existente
+/// </summary>
+/// <param name="id">ID do produto</param>
+/// <param name="command">Dados atualizados</param>
+/// <returns>Produto atualizado</returns>
+/// <response code="200">Produto atualizado</response>
+/// <response code="400">Dados inválidos</response>
+/// <response code="404">Produto não encontrado</response>
+[HttpPut("{id:guid}")]
+[ProducesResponseType(typeof(ProductDto), StatusCodes.Status200OK)]
+[ProducesResponseType(typeof(ApiProblemDetails), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiProblemDetails), StatusCodes.Status404NotFound)]
+public async Task<IActionResult> UpdateProduct(Guid id, [FromBody] UpdateProductCommand command)
+{
+    if (id != command.Id)
+        return BadRequest(new ApiProblemDetails
+        {
+            Title = "Invalid request",
+            Detail = "ID in URL does not match ID in body",
+            Status = StatusCodes.Status400BadRequest
+        });
+
+    var result = await _mediator.Send(command);
+    return HandleResult(result);
+}
+```
+
+### 7.5. PATCH - Atualização Parcial
+
+```csharp
+using Microsoft.AspNetCore.JsonPatch;
+
+/// <summary>
+/// Atualização parcial de um produto
+/// </summary>
+/// <param name="id">ID do produto</param>
+/// <param name="patchDoc">Documento JSON Patch</param>
+/// <returns>Produto atualizado</returns>
+/// <response code="200">Produto atualizado</response>
+/// <response code="400">Patch inválido</response>
+/// <response code="404">Produto não encontrado</response>
+[HttpPatch("{id:guid}")]
+[ProducesResponseType(typeof(ProductDto), StatusCodes.Status200OK)]
+[ProducesResponseType(typeof(ApiProblemDetails), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ApiProblemDetails), StatusCodes.Status404NotFound)]
+public async Task<IActionResult> PatchProduct(
+    Guid id,
+    [FromBody] JsonPatchDocument<UpdateProductCommand> patchDoc)
+{
+    // Buscar produto atual
+    var getResult = await _mediator.Send(new GetProductByIdQuery(id));
+    if (getResult.IsFailure)
+        return HandleResult(getResult);
+
+    // Aplicar patch
+    var command = new UpdateProductCommand { Id = id };
+    patchDoc.ApplyTo(command, ModelState);
+
+    if (!ModelState.IsValid)
+        return ValidationProblem(ModelState);
+
+    // Executar update
+    var result = await _mediator.Send(command);
+    return HandleResult(result);
+}
+```
+
+### 7.6. DELETE - Remoção
+
+```csharp
+/// <summary>
+/// Remove um produto
+/// </summary>
+/// <param name="id">ID do produto</param>
+/// <returns>No content</returns>
+/// <response code="204">Produto removido com sucesso</response>
+/// <response code="404">Produto não encontrado</response>
+[HttpDelete("{id:guid}")]
+[ProducesResponseType(StatusCodes.Status204NoContent)]
+[ProducesResponseType(typeof(ApiProblemDetails), StatusCodes.Status404NotFound)]
+public async Task<IActionResult> DeleteProduct(Guid id)
+{
+    var result = await _mediator.Send(new DeleteProductCommand(id));
+    return HandleResult(result);
+}
+```
+
+### 7.7. Bulk Operations
+
+```csharp
+/// <summary>
+/// Cria múltiplos produtos em lote
+/// </summary>
+/// <param name="commands">Lista de produtos a criar</param>
+/// <returns>Resultado da operação em lote</returns>
+/// <response code="200">Operação concluída (pode ter falhas parciais)</response>
+/// <response code="400">Dados inválidos</response>
+[HttpPost("bulk")]
+[ProducesResponseType(typeof(BulkOperationResult<ProductDto>), StatusCodes.Status200OK)]
+[ProducesResponseType(typeof(ApiProblemDetails), StatusCodes.Status400BadRequest)]
+public async Task<IActionResult> BulkCreateProducts([FromBody] List<CreateProductCommand> commands)
+{
+    var result = await _mediator.Send(new BulkCreateProductsCommand(commands));
+    return HandleResult(result);
+}
+
+public class BulkOperationResult<T>
+{
+    public int TotalRequested { get; init; }
+    public int SuccessCount { get; init; }
+    public int FailureCount { get; init; }
+    public List<T> SuccessItems { get; init; } = [];
+    public List<BulkOperationError> Errors { get; init; } = [];
+}
+
+public record BulkOperationError(int Index, string Message);
+```
+
+---
+
+## 8. ❌ Anti-Patterns (O que NÃO fazer)
+
+### ❌ ERRADO: Retornar entidades de domínio
+
+```csharp
+// NUNCA faça isso!
+[HttpGet]
+public async Task<IActionResult> Get()
+{
+    var products = await _context.Products.ToListAsync(); // Entidade EF Core!
+    return Ok(products); // Expõe estrutura interna do domínio
+}
+```
+
+### ✅ CORRETO: Sempre usar DTOs
+
+```csharp
+[HttpGet]
+public async Task<IActionResult> Get()
+{
+    var result = await _mediator.Send(new GetProductsQuery());
+    return HandleResult(result); // ProductDto, não Product entity
+}
+```
+
+---
+
+### ❌ ERRADO: Lógica de negócio no controller
+
+```csharp
+// NUNCA faça isso!
+[HttpPost]
+public async Task<IActionResult> Create([FromBody] CreateProductDto dto)
+{
+    // Lógica de negócio no controller - ERRADO!
+    if (dto.Price < 0)
+        return BadRequest("Price cannot be negative");
+    
+    var product = new Product
+    {
+        Name = dto.Name,
+        Price = dto.Price * 1.1m // Cálculo de markup aqui - ERRADO!
+    };
+    
+    await _context.Products.AddAsync(product);
+    await _context.SaveChangesAsync();
+    
+    return Ok(product);
+}
+```
+
+### ✅ CORRETO: Controller delega para use case
+
+```csharp
+[HttpPost]
+public async Task<IActionResult> Create([FromBody] CreateProductCommand command)
+{
+    // Controller apenas delega - lógica está no handler
+    var result = await _mediator.Send(command);
+    
+    if (result.IsFailure)
+        return HandleResult(result);
+    
+    return CreatedAtActionResult(
+        nameof(GetProductById),
+        new { id = result.Value.Id },
+        result.Value
+    );
+}
+```
+
+---
+
+### ❌ ERRADO: Usar exceptions para flow control
+
+```csharp
+// NUNCA faça isso!
+[HttpGet("{id}")]
+public async Task<IActionResult> Get(Guid id)
+{
+    try
+    {
+        var product = await _repository.GetByIdAsync(id);
+        return Ok(product);
+    }
+    catch (NotFoundException ex)
+    {
+        return NotFound(ex.Message); // Exceptions não devem controlar fluxo!
+    }
+}
+```
+
+### ✅ CORRETO: Usar Result Pattern
+
+```csharp
+[HttpGet("{id:guid}")]
+public async Task<IActionResult> Get(Guid id)
+{
+    var result = await _mediator.Send(new GetProductByIdQuery(id));
+    return HandleResult(result); // Result contém sucesso ou erro
+}
+```
+
+---
+
+### ❌ ERRADO: Status codes inconsistentes
+
+```csharp
+// NUNCA faça isso!
+[HttpPost]
+public async Task<IActionResult> Create([FromBody] CreateProductCommand command)
+{
+    var result = await _mediator.Send(command);
+    
+    if (!result.IsSuccess)
+        return Ok(new { error = result.Error.Message }); // 200 para erro!
+    
+    return Ok(result.Value); // 200 para criação!
+}
+```
+
+### ✅ CORRETO: Status codes semânticos
+
+```csharp
+[HttpPost]
+public async Task<IActionResult> Create([FromBody] CreateProductCommand command)
+{
+    var result = await _mediator.Send(command);
+    
+    if (result.IsFailure)
+        return HandleResult(result); // 400/404/409 conforme tipo de erro
+    
+    return CreatedAtActionResult( // 201 Created
+        nameof(GetProductById),
+        new { id = result.Value.Id },
+        result.Value
+    );
+}
+```
+
+---
+
+### ❌ ERRADO: Controllers "fat"
+
+```csharp
+// Controller com 500+ linhas, múltiplas responsabilidades - ERRADO!
+public class ProductsController : ControllerBase
+{
+    // 20+ métodos
+    // Lógica de validação
+    // Mapeamento de DTOs
+    // Acesso direto ao DbContext
+    // Cálculos de negócio
+}
+```
+
+### ✅ CORRETO: Controllers "thin"
+
+```csharp
+// Controller com apenas orquestração - CORRETO!
+public class ProductsController(IMediator mediator) : BaseApiController
+{
+    private readonly IMediator _mediator = mediator;
+
+    [HttpGet]
+    public async Task<IActionResult> Get([FromQuery] GetProductsQuery query)
+        => HandleResult(await _mediator.Send(query));
+
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateProductCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return result.IsSuccess
+            ? CreatedAtActionResult(nameof(GetProductById), new { id = result.Value.Id }, result.Value)
+            : HandleResult(result);
+    }
+}
+```
+
+---
+
+## 9. 🏥 Health Checks Avançados
+
+### 9.1. Configuração (Program.cs)
+
+```csharp
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<AppDbContext>("database")
+    .AddRedis(builder.Configuration.GetConnectionString("Redis")!, "redis")
+    .AddUrlGroup(new Uri(builder.Configuration["ExternalApi:Url"]!), "external-api");
+
+app.MapHealthChecks("/healthz", new HealthCheckOptions
+{
+    ResponseWriter = async (context, report) =>
+    {
+        context.Response.ContentType = "application/json";
+        var result = JsonSerializer.Serialize(new
+        {
+            status = report.Status.ToString(),
+            checks = report.Entries.Select(e => new
+            {
+                name = e.Key,
+                status = e.Value.Status.ToString(),
+                description = e.Value.Description,
+                duration = e.Value.Duration.TotalMilliseconds
+            }),
+            totalDuration = report.TotalDuration.TotalMilliseconds
+        });
+        await context.Response.WriteAsync(result);
+    }
+});
+
+// Readiness vs Liveness
+app.MapHealthChecks("/healthz/ready", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready")
+});
+
+app.MapHealthChecks("/healthz/live", new HealthCheckOptions
+{
+    Predicate = _ => false // Sempre retorna 200
+});
+```
+
+---
+
+## 10. 📚 Swagger/OpenAPI
+
+### 10.1. Configuração com Versionamento
+
+```csharp
+using Asp.Versioning.ApiExplorer;
+
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Version = "v1",
+        Title = "Products API",
+        Description = "API para gerenciamento de produtos",
+        Contact = new OpenApiContact
+        {
+            Name = "Equipe Dev",
+            Email = "dev@example.com"
+        }
+    });
+
+    // XML comments
+    var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
+    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+    options.IncludeXmlComments(xmlPath);
+
+    // JWT Bearer
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "JWT Authorization header using the Bearer scheme",
+        Name = "Authorization",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer"
+    });
+
+    options.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+});
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI(options =>
+    {
+        var provider = app.Services.GetRequiredService<IApiVersionDescriptionProvider>();
+        foreach (var description in provider.ApiVersionDescriptions)
+        {
+            options.SwaggerEndpoint(
+                $"/swagger/{description.GroupName}/swagger.json",
+                description.GroupName.ToUpperInvariant()
+            );
+        }
+    });
+}
+```
+
+---
+
+## 11. ✅ Checklist de Boas Práticas
+
+### Controllers
+- [ ] Todos os controllers herdam de `BaseApiController`
+- [ ] Controllers apenas orquestram (delegam para MediatR)
+- [ ] ZERO lógica de negócio nos controllers
+- [ ] Sempre retornam `IActionResult`, nunca tipos concretos
+- [ ] Usam `HandleResult()` para converter `Result<T>` em responses
+
+### DTOs e Validação
+- [ ] NUNCA expor entidades de domínio diretamente
+- [ ] Todos os requests usam DTOs/Commands/Queries
+- [ ] Validação com FluentValidation nos handlers (não no controller)
+- [ ] ModelState validado automaticamente via `ApiBehaviorOptions`
+
+### Status Codes
+- [ ] 200 OK - Sucesso com corpo
+- [ ] 201 Created - Criação com Location header
+- [ ] 204 No Content - Sucesso sem corpo (DELETE, PUT sem retorno)
+- [ ] 400 Bad Request - Validação falhou
+- [ ] 401 Unauthorized - Não autenticado
+- [ ] 403 Forbidden - Não autorizado
+- [ ] 404 Not Found - Recurso não encontrado
+- [ ] 409 Conflict - Conflito (ex: unique constraint)
+- [ ] 500 Internal Server Error - Erro não tratado
+
+### Problem Details
+- [ ] Todos os erros retornam `ApiProblemDetails` (RFC 7807)
+- [ ] `TraceId` incluído para correlação com logs
+- [ ] `Type` aponta para URI da spec HTTP
+- [ ] `Errors` array para múltiplas mensagens de validação
+
+### Paginação
+- [ ] Usar `PagedResult<T>` padronizado
+- [ ] Queries herdam de `PagedQuery`
+- [ ] Validar `Page` >= 1 e `PageSize` entre 1-100
+
+### Versionamento
+- [ ] API versionada via URL (`/api/v1/products`)
+- [ ] `Asp.Versioning.Mvc` configurado
+- [ ] Versões antigas mantidas até deprecação planejada
+
+### Documentação
+- [ ] XML comments em todos os endpoints públicos
+- [ ] `ProducesResponseType` para cada status code possível
+- [ ] Swagger UI funcional em desenvolvimento
+- [ ] Exemplos de requests/responses documentados
+
+---
+
+## 12. 📖 Referências
+
+- [RFC 7807 - Problem Details](https://tools.ietf.org/html/rfc7807)
+- [Microsoft REST API Guidelines](https://github.com/microsoft/api-guidelines)
+- [ASP.NET Core Web API Best Practices](https://learn.microsoft.com/en-us/aspnet/core/web-api/)
+- [Result Pattern](https://www.youtube.com/watch?v=WCCkEe_Hy2Y)
+
+---
+
+**Última atualização**: 2026-02-06  
+**Versão da regra**: 1.0.0

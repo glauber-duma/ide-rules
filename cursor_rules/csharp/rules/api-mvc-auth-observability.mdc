@@ -1,8 +1,9 @@
 ---
+---
 Rule: api-mvc-auth-observability.mdc
-Description: Padroes para API MVC com autenticacao/autorizacao (JWT Bearer) e observabilidade.
+Description: Padroes para API MVC com autenticacao/autorizacao (JWT Bearer) e observabilidade, incluindo entidades e repositorios base.
 globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/Dockerfile"]
-rules: @csharp-style-guide
+rules: @csharp-style-guide, @entity-validator, @efcore-repository, @dapper-repository, @fluentvalidation, @use-cases, @unit-testing, @docker-containers, @api-controllers, @observability
 alwaysApply: false
 tags: ["csharp", "api", "mvc", "auth", "observability", "docker"]
 Author: Glauber Duma
@@ -12,7 +13,7 @@ Created: 2026-02
 # API com autenticacao
 
 ## 1) Objetivo
-Padronizar APIs ASP.NET Core MVC com autenticacao/autorizacao via JWT Bearer e observabilidade.
+Padronizar APIs ASP.NET Core MVC com autenticacao/autorizacao via JWT Bearer e observabilidade, com entidades validadas e repositorio generico.
 
 ## 2) Estrutura de pastas
 ```
@@ -65,6 +66,9 @@ builder.Services.AddAuthorization(opt =>
     opt.AddPolicy("api.read", p => p.RequireClaim("scope", "api.read"));
 });
 
+builder.Services.AddDbContext<AppDbContext>(opt => opt.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
+builder.Services.AddScoped(typeof(IRepository<>), typeof(EfRepository<>));
+
 builder.Services.AddControllers(opt =>
 {
     opt.Filters.Add<AuthorizeFilter>();
@@ -85,28 +89,40 @@ app.MapControllers();
 app.Run();
 ```
 
-## 5) Exemplo de controller protegido
-```csharp
-[ApiController]
-[Route("api/orders")]
-[Authorize(Policy = "api.read")]
-public class OrdersController : ControllerBase
-{
-    [HttpGet]
-    public IEnumerable<string> Get() => new[] { "order-1", "order-2" };
-}
-```
+## 5) Entidades (EF Core) com validação
+Para padronizar entidades EF Core com setters privados, construtores validados e métodos de mutação que revalidam, utilize a rule compartilhada `entity-validator.mdc`. Ela centraliza o snippet e as orientações para consistência entre projetos.
 
-## 6) Observabilidade
-- Logs estruturados com userId/tenant (sem dados sensiveis), traceId e correlation id.
-- Traces e metrics via OpenTelemetry; exporter OTLP.
-- Health checks expostos e protegidos conforme necessidade.
+## 6) Repositório genérico (EF Core)
+Para padronizar o repositório genérico EF Core, utilize a rule compartilhada `efcore-repository.mdc`. Ela centraliza o contrato, implementação, DTO de paginação e orientações de uso.
 
-## 7) Testes
-- Unit: services, handlers, validators, utilizar xunit/moq/fluentassertions.
+## 7) Repositório genérico (Dapper) para aplicações simples
+Para padronizar o repositório Dapper para cenários simples, utilize a rule compartilhada `dapper-repository.mdc`. Ela centraliza o contrato, implementação e orientações para uso plugável.
+
+## 8) API Controllers protegidos
+Para padrões completos de API controllers (BaseApiController, Result Pattern, Problem Details RFC 7807, status codes semânticos, paginação, versionamento), consulte `@api-controllers`.
+
+**Especificidades deste projeto**:
+- Controllers herdam de `BaseApiController` e delegam para MediatR
+- Use `HandleResult()` para converter `Result<T>` em `IActionResult`
+- **SEMPRE** aplique `[Authorize]` ou `[Authorize(Policy = "nome.policy")]` nos controllers ou endpoints
+- Logs devem incluir userId/tenant (sem dados sensíveis)
+
+## 9) Observabilidade
+Para padrões completos de observabilidade (Serilog com logs estruturados, OpenTelemetry com traces e metrics, Health Checks), consulte `@observability`.
+
+**Especificidades deste projeto**:
+- Logs incluem userId/tenant (SEM dados sensíveis) quando autenticado
+- Health checks podem ser protegidos com `[Authorize]` conforme necessidade
+- CorrelationId via middleware + JWT claims propagados
+
+## 10) Testes
+Para padrões de testes (xUnit, Moq, FluentAssertions, Bogus, Testcontainers, cobertura), consulte `@unit-testing`.
+
+**Especificidades deste projeto**:
+- Unit: services, handlers, validators, repositorios com InMemoryDb.
 - Integration: endpoints protegidos com JWT mockado via WebApplicationFactory.
 
-## 8) Dockerfile (opcional)
+## 11) Dockerfile (opcional)
 ```Dockerfile
 FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
 WORKDIR /app
@@ -123,7 +139,12 @@ COPY --from=build /app/publish .
 ENTRYPOINT ["dotnet", "Api.dll"]
 ```
 
-## 9) Checklist
-- JWT Bearer configurado (authority/audience, policies).
+
+## 12) Checklist
+- Entidades conforme `entity-validator.mdc`.
+- Repositório genérico conforme `efcore-repository.mdc`.
+- Repositório Dapper conforme `dapper-repository.mdc` (se aplicável).
+- Validadores conforme `fluentvalidation.mdc`.
+- JWT Bearer configurado corretamente; policies definidas.
 - Observabilidade ativa (logs + traces + metrics + healthcheck).
-- Testes unitarios e integracao cobrindo rotas protegidas.
+- Testes conforme `@unit-testing`: cobertura unit e integration nas rotas protegidas e repositórios.

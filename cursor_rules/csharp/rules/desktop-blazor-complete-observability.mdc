@@ -2,7 +2,7 @@
 Rule: desktop-blazor-complete-observability.mdc
 Description: Padroes para desktop Blazor Hybrid completo com observabilidade.
 globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/*.razor"]
-rules: @csharp-style-guide
+rules: @csharp-style-guide, @entity-validator, @efcore-repository, @dapper-repository, @fluentvalidation, @use-cases, @unit-testing, @observability
 alwaysApply: false
 tags: ["csharp", "desktop", "blazor", "observability", "offline"]
 Author: Glauber Duma
@@ -66,20 +66,40 @@ return builder.Build();
 ```
 
 ## 5) Observabilidade
-- Logs estruturados por pagina/acao; registrar falhas de sync e tempo de sincronizacao.
-- Traces de chamadas HTTP; spans manuais para etapas de sync.
-- Metrics: itens sincronizados, tamanho de fila offline, latencia de sync.
+Para padrões completos de observabilidade (Serilog com logs estruturados, OpenTelemetry com traces e metrics, Health Checks), consulte `@observability`.
 
-## 6) Offline e sincronizacao
+**Especificidades deste projeto**:
+- Logs estruturados por página/ação; registrar falhas de sync e tempo de sincronização
+- Custom spans para etapas de sync (offline → online)
+- Custom metrics: itens sincronizados, tamanho de fila offline, latência de sync
+- Health checks NÃO se aplicam (aplicação desktop)
+
+## 6) Entidades (EF Core) com validação
+Para padronizar entidades EF Core com setters privados, construtores validados e métodos de mutação que revalidam, utilize a rule compartilhada `entity-validator.mdc`. Ela centraliza o snippet e as orientações para consistência entre projetos.
+
+## 7) Repositório genérico (EF Core)
+Para padronizar o repositório genérico EF Core, utilize a rule compartilhada `efcore-repository.mdc`. Ela centraliza o contrato, implementação, DTO de paginação e orientações de uso.
+
+## 8) Repositório genérico (Dapper) para aplicações simples
+Para padronizar o repositório Dapper para cenários simples, utilize a rule compartilhada `dapper-repository.mdc`. Ela centraliza o contrato, implementação e orientações para uso plugável.
+
+## 9) Offline e sincronizacao
 - Fila local (SQLite/arquivo) para comandos quando offline.
 - Processador de fila com retry exponencial e deduplicacao.
 - Cache local para leituras (stale-while-revalidate simples).
 
-## 7) Testes
+## 10) Testes
+Para padrões de testes (xUnit, Moq, FluentAssertions, Bogus, Testcontainers, cobertura), consulte `@unit-testing`.
+
+**Especificidades deste projeto**:
 - Unit: state containers, orchestradores de sync, policies de retry.
 - Integration: cenarios offline/online alternando, validando persistencia local e reenvio.
 
-## 8) Checklist
+## 11) Checklist
+- Entidades conforme `entity-validator.mdc`.
+- Repositório genérico conforme `efcore-repository.mdc`.
+- Repositório Dapper conforme `dapper-repository.mdc` (se aplicável).
+- Validadores conforme `fluentvalidation.mdc`.
 - Observabilidade ativa (logs + traces + metrics) cobrindo sync.
 - Retry configurado em chamadas HTTP.
-- Offline/queue local implementados e testados.
+- Testes conforme `@unit-testing`: cobertura unit e integration em offline/queue local.

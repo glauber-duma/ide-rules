@@ -1,40 +1,8 @@
 ---
 Rule: microservices-complete-observability.mdc
-Description: Padroes para microservicos completos sem Dapr, com observabilidade.
-globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json"]
-rules: @csharp-style-guide
-alwaysApply: false
-tags: ["csharp", "microservices", "observability", "resilience"]
-Author: Glauber Duma
-Created: 2026-02
----
-
-# Microservicos completos sem Dapr
-
-## 1) Objetivo
-Padronizar microservicos completos com mensageria e observabilidade.
-
-## 2) Estrutura de pastas
-```
-src/
-  Api/
-  Application/
-  Domain/
-  Infrastructure/
-    Messaging/
-    Data/
-    Resilience/
-  Tests/
-    Unit/
-    Integration/
-```
-
-## 3) Pacotes recomendados
----
-Rule: microservices-complete-observability.mdc
 Description: Padroes para microservicos completos sem Dapr, com observabilidade, resiliencia e mensageria.
 globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/Dockerfile", "**/docker-compose*.yml"]
-rules: @csharp-style-guide
+rules: @csharp-style-guide, @entity-validator, @efcore-repository, @dapper-repository, @fluentvalidation, @use-cases, @unit-testing, @docker-containers, @api-controllers, @observability
 alwaysApply: false
 tags: ["csharp", "microservices", "observability", "resilience", "docker", "kafka"]
 Author: Glauber Duma
@@ -121,7 +89,25 @@ app.MapControllers();
 app.Run();
 ```
 
-## 5) Dockerfile (API)
+## 5) Entidades (EF Core) com validação
+Para padronizar entidades EF Core com setters privados, construtores validados e métodos de mutação que revalidam, utilize a rule compartilhada `entity-validator.mdc`. Ela centraliza o snippet e as orientações para consistência entre projetos.
+
+## 6) Repositório genérico (EF Core)
+Para padronizar o repositório genérico EF Core, utilize a rule compartilhada `efcore-repository.mdc`. Ela centraliza o contrato, implementação, DTO de paginação e orientações de uso.
+
+## 7) Repositório genérico (Dapper) para aplicações simples
+Para padronizar o repositório Dapper para cenários simples, utilize a rule compartilhada `dapper-repository.mdc`. Ela centraliza o contrato, implementação e orientações para uso plugável.
+
+## 8) API Controllers
+Para padrões completos de API controllers (BaseApiController, Result Pattern, Problem Details RFC 7807, status codes semânticos, paginação, versionamento), consulte `@api-controllers`.
+
+**Especificidades deste projeto**:
+- Controllers herdam de `BaseApiController` e delegam para MediatR
+- Use `HandleResult()` para converter `Result<T>` em `IActionResult`
+- Logs incluem CorrelationId via `CorrelationIdFilter`
+- Implementação com resiliência (Polly) e mensageria (MassTransit)
+
+## 9) Dockerfile (API)
 ```Dockerfile
 FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
 WORKDIR /app
@@ -138,7 +124,7 @@ COPY --from=build /app/publish .
 ENTRYPOINT ["dotnet", "Api.dll"]
 ```
 
-## 6) docker-compose (Kafka)
+## 10) docker-compose (Kafka)
 ```yaml
 version: "3.9"
 services:
@@ -168,23 +154,34 @@ services:
       - "9092:9092"
 ```
 
-## 7) Observabilidade
-- OTLP exporter para collector central.
-- Logs estruturados com traceId e correlation id.
-- Health checks em `/healthz` e dependencias (mensageria, DB).
+## 11) Observabilidade
+Para padrões completos de observabilidade (Serilog com logs estruturados, OpenTelemetry com traces e metrics, Health Checks), consulte `@observability`.
 
-## 8) Resiliencia e confiabilidade
+**Especificidades deste projeto**:
+- OTLP exporter apontando para collector central
+- Logs com correlationId via `CorrelationIdFilter`
+- Health checks verificam dependências: database, mensageria (Kafka/RabbitMQ), Redis
+- Custom metrics para monitorar filas e throughput de mensagens
+
+## 12) Resiliencia e confiabilidade
 - Polly: timeout, retry com jitter, circuit breaker.
 - Idempotencia: chaves de deduplicacao em mensagens e comandos.
 - Outbox: persistir eventos de dominio antes de publicar em Kafka.
 
-## 9) Testes
+## 13) Testes
+Para padrões de testes (xUnit, Moq, FluentAssertions, Bogus, Testcontainers, cobertura), consulte `@unit-testing`.
+
+**Especificidades deste projeto**:
 - Unit: handlers MediatR, validators, domain services.
 - Integration: subir docker-compose (Kafka) e validar publish/consume; API end-to-end com banco em container.
 - Contratos: schemas Avro/JSON para eventos e consumidores.
 
-## 10) Checklist
+## 14) Checklist
+- Entidades conforme `entity-validator.mdc`.
+- Repositório genérico conforme `efcore-repository.mdc`.
+- Repositório Dapper conforme `dapper-repository.mdc` (se aplicável).
+- Validadores conforme `fluentvalidation.mdc`.
 - Dockerfile e docker-compose presentes.
 - Observabilidade ativa (logs + traces + metrics).
-- Resiliencia configurada nos HTTP clients e consumers.
-- Testes unitarios e de integracao cobrindo fluxos principais e mensageria.
+- Resiliência configurada nos HTTP clients e consumers.
+- Testes conforme `@unit-testing`: cobertura unit e integration nos fluxos principais e mensageria.

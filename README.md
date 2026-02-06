@@ -9,7 +9,7 @@ Este repositorio organiza rules (.mdc) e prompts (.md) para:
 - Padroes de codigo e estilo.
 - Arquitetura e organizacao de projetos.
 - Boas praticas especificas (API, middleware, validacao, seguranca, cache, dados, mensageria, etc.).
-- Templates de referencia para equipes, agora com exemplos de codigo, configuracao de observabilidade e conteinerizacao (Docker/Docker Compose para cenarios Dapr).
+- Templates de referencia para equipes, agora com exemplos de codigo, configuracao de observabilidade e conteinerizacao (Docker/Docker Compose para cenarios Dapr), incluindo entidades com sets privados, validacao FluentValidation e repositorios genericos EF Core (Dapper apenas para cenarios simples) e controllers/handlers seguindo use cases com Mediator.
 
 ## Estrutura
 
@@ -18,7 +18,13 @@ cursor_rules/
 	csharp/
 		general/
 			csharp-style-guide.mdc
+			entity-validator.mdc
+			efcore-repository.mdc
+			dapper-repository.mdc
 			prompt_style_guide.md
+			prompt_entity_validator.md
+			prompt_efcore_repository.md
+			prompt_dapper_repository.md
 		inso/
 			app-batch.mdc
 			prompt_app_batch.md
@@ -94,18 +100,21 @@ cursor_rules/
 
 1. Escolha a regra apropriada na arvore `cursor_rules/`.
 2. Aplique no editor (Cursor/VS Code) conforme o fluxo do seu time.
-3. Use os prompts quando precisar gerar uma nova versao da regra ou ampliar exemplos; regras de microservicos incluem Dockerfile e docker-compose (sidecar Dapr, Kafka, Redis) e componentes Dapr prontos para pub/sub e state.
+3. Use os prompts quando precisar gerar uma nova versao da regra ou ampliar exemplos; regras de microservicos incluem Dockerfile e docker-compose (sidecar Dapr, Kafka, Redis) e componentes Dapr prontos para pub/sub e state, além de entidades de exemplo com validacao FluentValidation, repositorios genericos `IRepository<TClass, TType>` para EF Core, Dapper para cenarios simples, e controllers/handlers no padrao use case com Mediator.
 
 ## Regras disponiveis (resumo)
 
 ### C#
 
 - `csharp-style-guide.mdc`: guia de estilo e boas praticas para projetos .NET.
+- `entity-validator.mdc`: snippet base de entidade EF Core com validacao FluentValidation (sets privados, construtores com validacao, metodos que revalidam) para reaproveitar em outras rules; EF Core como padrao e Dapper apenas em cenarios simples.
+- `efcore-repository.mdc`: snippet base de repositorio generico EF Core (`IRepository<TClass, TType>` + `EfRepository<TClass, TType>` com CRUD/filtro/paginacao e `PagedResult<T>`), para reuso entre rules.
+- `dapper-repository.mdc`: snippet base de repositorio generico Dapper para aplicacoes simples (CRUD, filtro, paginacao, `PagedResult<T>`), reforcando que Dapper e para modelo pequeno e sem tracking/lazy loading.
 - `app-batch.mdc`: padroes para console apps e processamento em lote.
 - `web-mvc-simple-observability.mdc`: MVC simples sem autenticacao, com observabilidade.
 - `web-mvc-auth-observability.mdc`: MVC com autenticacao/autorizacao e observabilidade.
-- `api-mvc-simple-observability.mdc`: API MVC simples sem autenticacao, com observabilidade.
-- `api-mvc-auth-observability.mdc`: API MVC com autenticacao/autorizacao e observabilidade.
+- `api-mvc-simple-observability.mdc`: API MVC simples sem autenticacao, com observabilidade, entidades validadas e repositorio generico EF Core (Dapper em cenarios simples).
+- `api-mvc-auth-observability.mdc`: API MVC com autenticacao/autorizacao e observabilidade, entidades validadas e repositorio generico EF Core.
 - `microservices-dapr-simple-observability.mdc`: microservicos simples com Dapr, Dockerfile, docker-compose (sidecar), componentes Kafka/Redis e exemplos de publish/subscribe.
 - `microservices-dapr-complete-observability.mdc`: microservicos completos com Dapr, resiliencia, Dockerfile, docker-compose (sidecar), componentes Kafka/Redis e exemplos de handlers.
 - `microservices-simple-observability.mdc`: microservicos simples sem Dapr, com observabilidade, Dockerfile e testes.

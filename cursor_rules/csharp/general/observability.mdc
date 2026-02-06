@@ -1,0 +1,937 @@
+---
+Rule: observability.mdc
+Description: Padroes para observabilidade completa (logs estruturados com Serilog, traces e metrics com OpenTelemetry, health checks).
+globs: ["**/Program.cs", "**/*Filter.cs", "**/*Middleware.cs", "**/appsettings*.json"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "observability", "serilog", "opentelemetry", "health-checks", "logging"]
+Author: Glauber Duma
+Created: 2026-02
+Version: 1.0.0
+---
+
+# Observabilidade - Logs, Traces, Metrics e Health Checks
+
+## 1. 🎯 Princípios da Observabilidade
+
+### Os 3 Pilares
+1. **Logs** → Eventos discretos com contexto estruturado
+2. **Traces** → Fluxo de requisições através de serviços distribuídos
+3. **Metrics** → Agregações numéricas (contadores, histogramas, gauges)
+
+### Correlation é OBRIGATÓRIA
+- **TraceId** → Identificador único da transação distribuída (OpenTelemetry)
+- **CorrelationId** → ID da requisição HTTP (pode ser o mesmo que TraceId)
+- **UserId/TenantId** → Contexto de negócio (quando autenticado)
+
+### NUNCA logue dados sensíveis
+- ❌ Senhas, tokens, CPF, cartão de crédito
+- ❌ PII (Personally Identifiable Information) sem consentimento
+- ✅ Use mascaramento quando necessário
+
+---
+
+## 2. 📝 Serilog - Logs Estruturados
+
+### 2.1. Configuração no Program.cs
+
+```csharp
+using Serilog;
+using Serilog.Events;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Configurar Serilog como provider de logging
+builder.Host.UseSerilog((context, services, configuration) => configuration
+    .ReadFrom.Configuration(context.Configuration)
+    .ReadFrom.Services(services)
+    .Enrich.FromLogContext()
+    .Enrich.WithMachineName()
+    .Enrich.WithEnvironmentName()
+    .Enrich.WithProperty("Application", context.Configuration["ApplicationName"] ?? "MyApp")
+    .WriteTo.Console(new Serilog.Formatting.Compact.CompactJsonFormatter())
+    .WriteTo.File(
+        new Serilog.Formatting.Compact.CompactJsonFormatter(),
+        "logs/log-.txt",
+        rollingInterval: RollingInterval.Day,
+        retainedFileCountLimit: 7)
+);
+
+// ... demais configurações
+
+var app = builder.Build();
+
+// Request logging com Serilog (registra todas as requisições HTTP)
+app.UseSerilogRequestLogging(options =>
+{
+    options.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000} ms";
+    options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
+    {
+        diagnosticContext.Set("RequestHost", httpContext.Request.Host.Value);
+        diagnosticContext.Set("UserAgent", httpContext.Request.Headers["User-Agent"].ToString());
+        diagnosticContext.Set("RemoteIP", httpContext.Connection.RemoteIpAddress);
+        
+        // Adiciona CorrelationId se existir
+        if (httpContext.Items.TryGetValue("CorrelationId", out var correlationId))
+            diagnosticContext.Set("CorrelationId", correlationId);
+        
+        // Adiciona UserId se autenticado
+        if (httpContext.User.Identity?.IsAuthenticated == true)
+        {
+            var userId = httpContext.User.FindFirst("sub")?.Value 
+                ?? httpContext.User.FindFirst("id")?.Value;
+            if (userId != null)
+                diagnosticContext.Set("UserId", userId);
+        }
+    };
+});
+
+app.Run();
+```
+
+### 2.2. appsettings.json
+
+```json
+{
+  "ApplicationName": "MyApi",
+  "Serilog": {
+    "Using": ["Serilog.Sinks.Console", "Serilog.Sinks.File"],
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft": "Warning",
+        "Microsoft.Hosting.Lifetime": "Information",
+        "Microsoft.EntityFrameworkCore": "Warning",
+        "System": "Warning"
+      }
+    },
+    "WriteTo": [
+      {
+        "Name": "Console",
+        "Args": {
+          "formatter": "Serilog.Formatting.Compact.CompactJsonFormatter, Serilog.Formatting.Compact"
+        }
+      },
+      {
+        "Name": "File",
+        "Args": {
+          "path": "logs/log-.txt",
+          "rollingInterval": "Day",
+          "retainedFileCountLimit": 7,
+          "formatter": "Serilog.Formatting.Compact.CompactJsonFormatter, Serilog.Formatting.Compact"
+        }
+      }
+    ],
+    "Enrich": ["FromLogContext", "WithMachineName", "WithEnvironmentName"],
+    "Properties": {
+      "Application": "MyApi"
+    }
+  }
+}
+```
+
+### 2.3. appsettings.Development.json
+
+```json
+{
+  "Serilog": {
+    "MinimumLevel": {
+      "Default": "Debug",
+      "Override": {
+        "Microsoft.EntityFrameworkCore.Database.Command": "Information"
+      }
+    },
+    "WriteTo": [
+      {
+        "Name": "Console",
+        "Args": {
+          "outputTemplate": "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj} {Properties:j}{NewLine}{Exception}"
+        }
+      }
+    ]
+  }
+}
+```
+
+### 2.4. Uso em Classes (ILogger<T>)
+
+```csharp
+using Microsoft.Extensions.Logging;
+
+namespace Application.Services;
+
+public class OrderService
+{
+    private readonly ILogger<OrderService> _logger;
+
+    public OrderService(ILogger<OrderService> logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task<Result<OrderDto>> CreateOrder(CreateOrderCommand command)
+    {
+        _logger.LogInformation(
+            "Creating order for customer {CustomerId} with {ItemCount} items",
+            command.CustomerId,
+            command.Items.Count
+        );
+
+        try
+        {
+            // lógica de criação
+            var order = new Order(command.CustomerId);
+            
+            _logger.LogInformation(
+                "Order {OrderId} created successfully for customer {CustomerId}",
+                order.Id,
+                command.CustomerId
+            );
+            
+            return Result.Success(MapToDto(order));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to create order for customer {CustomerId}",
+                command.CustomerId
+            );
+            return Result.Failure<OrderDto>(Error.Failure(
+                "Order.CreateFailed",
+                "Failed to create order"
+            ));
+        }
+    }
+}
+```
+
+### 2.5. Structured Logging - Boas Práticas
+
+```csharp
+// ✅ CORRETO: Template + propriedades estruturadas
+_logger.LogInformation(
+    "User {UserId} placed order {OrderId} with total {OrderTotal:C}",
+    userId,
+    orderId,
+    orderTotal
+);
+
+// ❌ ERRADO: String interpolation (perde estrutura)
+_logger.LogInformation($"User {userId} placed order {orderId} with total {orderTotal:C}");
+
+// ✅ CORRETO: Níveis apropriados
+_logger.LogDebug("Detailed debugging info");
+_logger.LogInformation("Important business event");
+_logger.LogWarning("Something unusual happened");
+_logger.LogError(exception, "Operation failed");
+_logger.LogCritical("System is in critical state");
+
+// ✅ CORRETO: Mascarar dados sensíveis
+_logger.LogInformation(
+    "User {Email} logged in",
+    email.Substring(0, 3) + "***@" + email.Split('@')[1]
+);
+
+// ❌ ERRADO: Logar senha/token
+_logger.LogInformation("User {Email} logged in with password {Password}", email, password);
+```
+
+---
+
+## 3. 🔍 CorrelationId Middleware/Filter
+
+### 3.1. CorrelationIdMiddleware (Recomendado)
+
+```csharp
+namespace Api.Middleware;
+
+public class CorrelationIdMiddleware
+{
+    private readonly RequestDelegate _next;
+    private const string CorrelationIdHeader = "X-Correlation-Id";
+
+    public CorrelationIdMiddleware(RequestDelegate next)
+    {
+        _next = next;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        var correlationId = context.Request.Headers[CorrelationIdHeader].FirstOrDefault()
+            ?? Guid.NewGuid().ToString();
+
+        // Adiciona ao HttpContext.Items para uso posterior
+        context.Items["CorrelationId"] = correlationId;
+
+        // Adiciona ao response header
+        context.Response.Headers.TryAdd(CorrelationIdHeader, correlationId);
+
+        // Adiciona ao Serilog LogContext
+        using (Serilog.Context.LogContext.PushProperty("CorrelationId", correlationId))
+        {
+            await _next(context);
+        }
+    }
+}
+
+// Registrar no Program.cs
+app.UseMiddleware<CorrelationIdMiddleware>();
+```
+
+### 3.2. CorrelationIdFilter (Alternativa para MVC)
+
+```csharp
+using Microsoft.AspNetCore.Mvc.Filters;
+using Serilog.Context;
+
+namespace Api.Filters;
+
+public class CorrelationIdFilter : IActionFilter
+{
+    private const string CorrelationIdHeader = "X-Correlation-Id";
+
+    public void OnActionExecuting(ActionExecutingContext context)
+    {
+        var correlationId = context.HttpContext.Request.Headers[CorrelationIdHeader].FirstOrDefault()
+            ?? Guid.NewGuid().ToString();
+
+        context.HttpContext.Items["CorrelationId"] = correlationId;
+        context.HttpContext.Response.Headers.TryAdd(CorrelationIdHeader, correlationId);
+        
+        LogContext.PushProperty("CorrelationId", correlationId);
+        
+        // Adiciona UserId se autenticado
+        if (context.HttpContext.User.Identity?.IsAuthenticated == true)
+        {
+            var userId = context.HttpContext.User.FindFirst("sub")?.Value;
+            if (userId != null)
+                LogContext.PushProperty("UserId", userId);
+        }
+    }
+
+    public void OnActionExecuted(ActionExecutedContext context)
+    {
+        // Cleanup if needed
+    }
+}
+
+// Registrar no Program.cs
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<CorrelationIdFilter>();
+});
+```
+
+---
+
+## 4. 📊 OpenTelemetry - Traces e Metrics
+
+### 4.1. Pacotes Necessários
+
+```xml
+<PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.7.0" />
+<PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.7.0" />
+<PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.7.0" />
+<PackageReference Include="OpenTelemetry.Instrumentation.EntityFrameworkCore" Version="1.0.0-beta.9" />
+<PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.7.0" />
+<PackageReference Include="OpenTelemetry.Exporter.Console" Version="1.7.0" />
+```
+
+### 4.2. Configuração Completa (Program.cs)
+
+```csharp
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+
+var builder = WebApplication.CreateBuilder(args);
+
+var serviceName = builder.Configuration["ApplicationName"] ?? "MyApi";
+var serviceVersion = "1.0.0";
+
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource
+        .AddService(
+            serviceName: serviceName,
+            serviceVersion: serviceVersion,
+            serviceInstanceId: Environment.MachineName))
+    .WithTracing(tracing => tracing
+        .AddAspNetCoreInstrumentation(options =>
+        {
+            options.RecordException = true;
+            options.EnrichWithHttpRequest = (activity, request) =>
+            {
+                activity.SetTag("http.request.method", request.Method);
+                activity.SetTag("http.request.path", request.Path);
+                
+                // Adiciona CorrelationId
+                if (request.HttpContext.Items.TryGetValue("CorrelationId", out var correlationId))
+                    activity.SetTag("correlation.id", correlationId);
+            };
+            options.EnrichWithHttpResponse = (activity, response) =>
+            {
+                activity.SetTag("http.response.status_code", response.StatusCode);
+            };
+        })
+        .AddHttpClientInstrumentation(options =>
+        {
+            options.RecordException = true;
+            options.EnrichWithHttpRequestMessage = (activity, request) =>
+            {
+                activity.SetTag("http.client.url", request.RequestUri?.ToString());
+            };
+        })
+        .AddEntityFrameworkCoreInstrumentation(options =>
+        {
+            options.SetDbStatementForText = true;
+            options.EnrichWithIDbCommand = (activity, command) =>
+            {
+                activity.SetTag("db.command", command.CommandText);
+            };
+        })
+        .AddSource(serviceName) // Para custom spans
+        .AddOtlpExporter(options =>
+        {
+            options.Endpoint = new Uri(builder.Configuration["OpenTelemetry:Endpoint"] ?? "http://localhost:4317");
+        })
+        .AddConsoleExporter() // Para desenvolvimento
+    )
+    .WithMetrics(metrics => metrics
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddRuntimeInstrumentation()
+        .AddProcessInstrumentation()
+        .AddMeter(serviceName) // Para custom metrics
+        .AddOtlpExporter(options =>
+        {
+            options.Endpoint = new Uri(builder.Configuration["OpenTelemetry:Endpoint"] ?? "http://localhost:4317");
+        })
+        .AddConsoleExporter() // Para desenvolvimento
+    );
+```
+
+### 4.3. appsettings.json (OpenTelemetry)
+
+```json
+{
+  "OpenTelemetry": {
+    "Endpoint": "http://otel-collector:4317",
+    "ServiceName": "MyApi",
+    "ServiceVersion": "1.0.0"
+  }
+}
+```
+
+### 4.4. Custom Spans (Traces Manuais)
+
+```csharp
+using System.Diagnostics;
+
+namespace Application.Services;
+
+public class PaymentService
+{
+    private static readonly ActivitySource ActivitySource = new("MyApi");
+    private readonly ILogger<PaymentService> _logger;
+
+    public PaymentService(ILogger<PaymentService> logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task<Result> ProcessPayment(Guid orderId, decimal amount)
+    {
+        // Cria span customizado
+        using var activity = ActivitySource.StartActivity("ProcessPayment", ActivityKind.Internal);
+        
+        activity?.SetTag("order.id", orderId);
+        activity?.SetTag("payment.amount", amount);
+        
+        try
+        {
+            _logger.LogInformation("Processing payment for order {OrderId}", orderId);
+            
+            // Simula processamento
+            await Task.Delay(100);
+            
+            // Span aninhado para operação específica
+            using var validationActivity = ActivitySource.StartActivity("ValidatePaymentMethod");
+            validationActivity?.SetTag("validation.type", "credit_card");
+            await ValidatePaymentMethodAsync();
+            
+            activity?.SetTag("payment.status", "success");
+            return Result.Success();
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("payment.status", "failed");
+            activity?.RecordException(ex);
+            _logger.LogError(ex, "Payment processing failed for order {OrderId}", orderId);
+            return Result.Failure(Error.Failure("Payment.Failed", ex.Message));
+        }
+    }
+
+    private Task ValidatePaymentMethodAsync()
+    {
+        // lógica de validação
+        return Task.CompletedTask;
+    }
+}
+```
+
+### 4.5. Custom Metrics
+
+```csharp
+using System.Diagnostics.Metrics;
+
+namespace Application.Services;
+
+public class OrderMetrics
+{
+    private readonly Counter<int> _ordersCreatedCounter;
+    private readonly Histogram<double> _orderProcessingDuration;
+    private readonly ObservableGauge<int> _pendingOrdersGauge;
+    
+    public OrderMetrics(IMeterFactory meterFactory)
+    {
+        var meter = meterFactory.Create("MyApi");
+        
+        _ordersCreatedCounter = meter.CreateCounter<int>(
+            "orders.created",
+            unit: "order",
+            description: "Total number of orders created"
+        );
+        
+        _orderProcessingDuration = meter.CreateHistogram<double>(
+            "order.processing.duration",
+            unit: "ms",
+            description: "Order processing duration in milliseconds"
+        );
+        
+        _pendingOrdersGauge = meter.CreateObservableGauge(
+            "orders.pending",
+            () => GetPendingOrdersCount(),
+            unit: "order",
+            description: "Current number of pending orders"
+        );
+    }
+
+    public void RecordOrderCreated(string status)
+    {
+        _ordersCreatedCounter.Add(1, new KeyValuePair<string, object?>("status", status));
+    }
+
+    public void RecordProcessingDuration(double durationMs, string status)
+    {
+        _orderProcessingDuration.Record(
+            durationMs,
+            new KeyValuePair<string, object?>("status", status)
+        );
+    }
+
+    private int GetPendingOrdersCount()
+    {
+        // Query para contar pedidos pendentes
+        return 0; // Implementar
+    }
+}
+```
+
+---
+
+## 5. 🏥 Health Checks
+
+### 5.1. Configuração Básica (Program.cs)
+
+```csharp
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddHealthChecks()
+    .AddCheck("self", () => HealthCheckResult.Healthy(), tags: new[] { "ready" })
+    .AddDbContextCheck<AppDbContext>("database", tags: new[] { "ready" });
+
+// Se usar Redis
+builder.Services.AddHealthChecks()
+    .AddRedis(
+        builder.Configuration.GetConnectionString("Redis")!,
+        name: "redis",
+        tags: new[] { "ready" }
+    );
+
+// Se usar RabbitMQ
+builder.Services.AddHealthChecks()
+    .AddRabbitMQ(
+        builder.Configuration.GetConnectionString("RabbitMQ")!,
+        name: "rabbitmq",
+        tags: new[] { "ready" }
+    );
+
+var app = builder.Build();
+
+// Endpoint básico de health check
+app.MapHealthChecks("/healthz");
+
+// Readiness (só retorna 200 quando dependências estão OK)
+app.MapHealthChecks("/healthz/ready", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready")
+});
+
+// Liveness (sempre retorna 200 se a aplicação está rodando)
+app.MapHealthChecks("/healthz/live", new HealthCheckOptions
+{
+    Predicate = _ => false
+});
+
+app.Run();
+```
+
+### 5.2. Health Check Customizado
+
+```csharp
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+
+namespace Infrastructure.HealthChecks;
+
+public class ExternalApiHealthCheck : IHealthCheck
+{
+    private readonly HttpClient _httpClient;
+    private readonly ILogger<ExternalApiHealthCheck> _logger;
+
+    public ExternalApiHealthCheck(
+        IHttpClientFactory httpClientFactory,
+        ILogger<ExternalApiHealthCheck> logger)
+    {
+        _httpClient = httpClientFactory.CreateClient("ExternalApi");
+        _logger = logger;
+    }
+
+    public async Task<HealthCheckResult> CheckHealthAsync(
+        HealthCheckContext context,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var response = await _httpClient.GetAsync("/healthz", cancellationToken);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                return HealthCheckResult.Healthy(
+                    description: "External API is healthy",
+                    data: new Dictionary<string, object>
+                    {
+                        { "status_code", (int)response.StatusCode },
+                        { "response_time_ms", response.Headers.Date?.Millisecond ?? 0 }
+                    }
+                );
+            }
+
+            return HealthCheckResult.Degraded(
+                description: $"External API returned {response.StatusCode}"
+            );
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "External API health check failed");
+            return HealthCheckResult.Unhealthy(
+                description: "External API is unreachable",
+                exception: ex
+            );
+        }
+    }
+}
+
+// Registrar no Program.cs
+builder.Services.AddHttpClient("ExternalApi", client =>
+{
+    client.BaseAddress = new Uri(builder.Configuration["ExternalApi:Url"]!);
+    client.Timeout = TimeSpan.FromSeconds(5);
+});
+
+builder.Services.AddHealthChecks()
+    .AddCheck<ExternalApiHealthCheck>("external-api", tags: new[] { "ready" });
+```
+
+### 5.3. Health Check UI (Resposta JSON)
+
+```csharp
+using System.Text.Json;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+
+app.MapHealthChecks("/healthz", new HealthCheckOptions
+{
+    ResponseWriter = async (context, report) =>
+    {
+        context.Response.ContentType = "application/json";
+        
+        var result = JsonSerializer.Serialize(new
+        {
+            status = report.Status.ToString(),
+            checks = report.Entries.Select(e => new
+            {
+                name = e.Key,
+                status = e.Value.Status.ToString(),
+                description = e.Value.Description,
+                duration = e.Value.Duration.TotalMilliseconds,
+                exception = e.Value.Exception?.Message,
+                data = e.Value.Data
+            }),
+            totalDuration = report.TotalDuration.TotalMilliseconds,
+            timestamp = DateTime.UtcNow
+        }, new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        });
+        
+        await context.Response.WriteAsync(result);
+    }
+});
+```
+
+**Resposta JSON:**
+```json
+{
+  "status": "Healthy",
+  "checks": [
+    {
+      "name": "self",
+      "status": "Healthy",
+      "description": null,
+      "duration": 0.05,
+      "exception": null,
+      "data": {}
+    },
+    {
+      "name": "database",
+      "status": "Healthy",
+      "description": null,
+      "duration": 12.34,
+      "exception": null,
+      "data": {}
+    }
+  ],
+  "totalDuration": 15.67,
+  "timestamp": "2026-02-06T10:30:00Z"
+}
+```
+
+### 5.4. Health Checks Protegidos (Autenticação)
+
+```csharp
+// Health check público (liveness)
+app.MapHealthChecks("/healthz/live", new HealthCheckOptions
+{
+    Predicate = _ => false
+});
+
+// Health check protegido (readiness + detalhes)
+app.MapHealthChecks("/healthz/ready", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready"),
+    ResponseWriter = WriteDetailedResponse
+})
+.RequireAuthorization("HealthCheckPolicy");
+
+// Definir policy no Program.cs
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("HealthCheckPolicy", policy =>
+        policy.RequireClaim("scope", "health.read"));
+});
+```
+
+---
+
+## 6. 🐳 Docker Compose com Observabilidade Stack
+
+### 6.1. docker-compose.yml
+
+```yaml
+version: "3.9"
+services:
+  app:
+    build: .
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - OpenTelemetry__Endpoint=http://otel-collector:4317
+      - ConnectionStrings__Default=Server=sqlserver;Database=MyDb;User=sa;Password=YourPassword123
+    ports:
+      - "8080:8080"
+    depends_on:
+      - sqlserver
+      - otel-collector
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=YourPassword123
+    ports:
+      - "1433:1433"
+
+  # OpenTelemetry Collector
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.91.0
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "8888:8888"   # Prometheus metrics
+      - "13133:13133" # Health check
+
+  # Jaeger (Traces UI)
+  jaeger:
+    image: jaegertracing/all-in-one:1.52
+    ports:
+      - "16686:16686" # UI
+      - "14268:14268" # Jaeger collector
+
+  # Prometheus (Metrics)
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  # Grafana (Dashboards)
+  grafana:
+    image: grafana/grafana:10.2.0
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    ports:
+      - "3000:3000"
+```
+
+### 6.2. otel-collector-config.yaml
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 10s
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+
+exporters:
+  logging:
+    loglevel: debug
+  jaeger:
+    endpoint: jaeger:14250
+    tls:
+      insecure: true
+  prometheus:
+    endpoint: 0.0.0.0:8888
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [logging, jaeger]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [logging, prometheus]
+```
+
+### 6.3. prometheus.yml
+
+```yaml
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector:8888']
+  
+  - job_name: 'app'
+    static_configs:
+      - targets: ['app:8080']
+    metrics_path: '/metrics'
+```
+
+---
+
+## 7. 📋 Checklist de Observabilidade
+
+### Logs (Serilog)
+- [ ] Serilog configurado com `CompactJsonFormatter` para produção
+- [ ] `UseSerilogRequestLogging` habilitado para todas as requisições HTTP
+- [ ] Enrichers configurados: `FromLogContext`, `WithMachineName`, `WithEnvironmentName`
+- [ ] CorrelationId/TraceId incluído em todos os logs
+- [ ] UserId/TenantId incluído quando autenticado
+- [ ] Níveis de log apropriados (Debug, Info, Warning, Error, Critical)
+- [ ] NUNCA loga dados sensíveis (senhas, tokens, PII)
+- [ ] Logs estruturados (template + properties, não string interpolation)
+- [ ] File sink configurado com rotação diária
+- [ ] Logs em desenvolvimento legíveis (outputTemplate vs JSON)
+
+### Traces (OpenTelemetry)
+- [ ] `AddAspNetCoreInstrumentation()` habilitado
+- [ ] `AddHttpClientInstrumentation()` habilitado
+- [ ] `AddEntityFrameworkCoreInstrumentation()` habilitado (se usar EF Core)
+- [ ] CorrelationId adicionado como tag nos spans
+- [ ] Custom spans para operações importantes de negócio
+- [ ] `RecordException = true` para capturar exceptions
+- [ ] OTLP exporter configurado apontando para collector
+- [ ] ServiceName e ServiceVersion configurados no Resource
+
+### Metrics (OpenTelemetry)
+- [ ] `AddAspNetCoreInstrumentation()` habilitado (requisições HTTP)
+- [ ] `AddHttpClientInstrumentation()` habilitado (chamadas externas)
+- [ ] `AddRuntimeInstrumentation()` habilitado (CPU, memória, GC)
+- [ ] `AddProcessInstrumentation()` habilitado (threads, handles)
+- [ ] Custom metrics para KPIs de negócio (orders created, processing duration)
+- [ ] OTLP exporter configurado
+
+### Health Checks
+- [ ] `/healthz/live` - liveness check (sempre retorna 200 se app está rodando)
+- [ ] `/healthz/ready` - readiness check (verifica dependências: DB, Redis, etc)
+- [ ] Health checks customizados para APIs externas
+- [ ] Response writer com JSON detalhado
+- [ ] Tags configuradas para separar ready/live checks
+- [ ] Health checks protegidos com autenticação (se necessário)
+
+### CorrelationId
+- [ ] CorrelationIdMiddleware ou CorrelationIdFilter implementado
+- [ ] Header `X-Correlation-Id` aceito no request
+- [ ] Header `X-Correlation-Id` incluído no response
+- [ ] CorrelationId adicionado ao Serilog LogContext
+- [ ] CorrelationId propagado para chamadas HTTP externas
+
+### Infraestrutura
+- [ ] OpenTelemetry Collector configurado
+- [ ] Jaeger/Zipkin configurado para visualizar traces
+- [ ] Prometheus configurado para coletar metrics
+- [ ] Grafana configurado com dashboards
+- [ ] docker-compose.yml com stack completa de observabilidade
+
+---
+
+## 8. 📚 Referências
+
+- [Serilog Documentation](https://github.com/serilog/serilog/wiki)
+- [OpenTelemetry .NET](https://opentelemetry.io/docs/instrumentation/net/)
+- [ASP.NET Core Health Checks](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/health-checks)
+- [The Three Pillars of Observability](https://www.oreilly.com/library/view/distributed-systems-observability/9781492033431/ch04.html)
+
+---
+
+**Última atualização**: 2026-02-06  
+**Versão da regra**: 1.0.0

@@ -1,0 +1,98 @@
+---
+Rule: efcore-repository.mdc
+Description: Snippet padrao de repositorio generico EF Core com CRUD, filtro e paginacao, reutilizavel em outras rules.
+globs: ["**/*.cs"]
+rules: @csharp-style-guide, @entity-validator
+alwaysApply: false
+tags: ["csharp", "efcore", "repository", "data-access"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Repositorio generico EF Core
+
+## 1) Objetivo
+Centralizar um repositorio generico EF Core com interface `IRepository<TClass, TType>` e implementacao `EfRepository<TClass, TType>` cobrindo CRUD, filtro e paginacao (`PagedResult<T>`), para ser referenciado por outras rules. EF Core e o padrao; Dapper reservado a aplicacoes simples.
+
+## 2) Snippet base (EF Core)
+```csharp
+public interface IRepository<TClass, TType> where TClass : class
+{
+  Task<TClass?> GetByIdAsync(TType id, CancellationToken ct);
+  Task<IReadOnlyList<TClass>> ListAsync(Expression<Func<TClass, bool>>? filter, CancellationToken ct);
+  Task<PagedResult<TClass>> PagedAsync(Expression<Func<TClass, bool>>? filter, int page, int pageSize, CancellationToken ct);
+  Task AddAsync(TClass entity, CancellationToken ct);
+  Task UpdateAsync(TClass entity, CancellationToken ct);
+  Task DeleteAsync(TClass entity, CancellationToken ct);
+}
+
+public class EfRepository<TClass, TType> : IRepository<TClass, TType> where TClass : class
+{
+  private readonly AppDbContext _db;
+  private readonly DbSet<TClass> _set;
+  public EfRepository(AppDbContext db) { _db = db; _set = db.Set<TClass>(); }
+
+  public Task<TClass?> GetByIdAsync(TType id, CancellationToken ct) => _set.FindAsync(new object[] { id! }, ct).AsTask();
+  public async Task<IReadOnlyList<TClass>> ListAsync(Expression<Func<TClass, bool>>? filter, CancellationToken ct) => filter is null ? await _set.ToListAsync(ct) : await _set.Where(filter).ToListAsync(ct);
+  public async Task<PagedResult<TClass>> PagedAsync(Expression<Func<TClass, bool>>? filter, int page, int pageSize, CancellationToken ct)
+  {
+    var query = filter is null ? _set.AsQueryable() : _set.Where(filter);
+    var total = await query.CountAsync(ct);
+    var items = await query.Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(ct);
+    return new PagedResult<TClass>(items, total, page, pageSize);
+  }
+  public async Task AddAsync(TClass entity, CancellationToken ct) { await _set.AddAsync(entity, ct); }
+  public Task UpdateAsync(TClass entity, CancellationToken ct) { _set.Update(entity); return Task.CompletedTask; }
+  public Task DeleteAsync(TClass entity, CancellationToken ct) { _set.Remove(entity); return Task.CompletedTask; }
+}
+
+public record PagedResult<T>(IReadOnlyList<T> Items, int Total, int Page, int PageSize);
+```
+
+## 3) DbContext e configuracao de entidades (IEntityTypeConfiguration)
+- Um `DbContext` sucinto com DbSets necessarios e `ApplyConfigurationsFromAssembly` para carregar mapeamentos.
+- Cada entidade deve ter **um arquivo** de configuracao separado implementando `IEntityTypeConfiguration<TEntity>`; nao declare mapeamentos inline no `DbContext`.
+- Exemplo:
+```csharp
+public class AppDbContext : DbContext
+{
+  public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+
+  public DbSet<Product> Products => Set<Product>();
+
+  protected override void OnModelCreating(ModelBuilder modelBuilder)
+  {
+    base.OnModelCreating(modelBuilder);
+    modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
+  }
+}
+
+# ProductConfiguration.cs
+public class ProductConfiguration : IEntityTypeConfiguration<Product>
+{
+  public void Configure(EntityTypeBuilder<Product> builder)
+  {
+    builder.ToTable("Products");
+    builder.HasKey(p => p.Id);
+    builder.Property(p => p.Name)
+           .IsRequired()
+           .HasMaxLength(200);
+    builder.Property(p => p.Price)
+           .HasColumnType("decimal(18,2)");
+  }
+}
+```
+
+## 4) Orientacoes de uso
+- EF Core como padrao; use Dapper apenas para aplicacoes simples (modelo pequeno, poucos relacionamentos, sem tracking/lazy loading).
+- Mantenha `PagedResult<T>` junto do repositorio ou em namespace comum de DTOs.
+- Registre `IRepository<>` e `EfRepository<>` na DI (`AddScoped`).
+- Combine com as rules `entity-validator.mdc` (entidades validadas) e `dapper-repository.mdc` quando oferecer alternativa simples.
+- Mantenha cada `IEntityTypeConfiguration` em arquivo proprio; evite mapeamento inline no `DbContext`.
+
+## 5) Checklist rapido
+- [ ] Interface `IRepository<TClass, TType>` com CRUD, filtro e paginacao.
+- [ ] Implementacao `EfRepository<TClass, TType>` usando `DbSet<TClass>` e `DbContext` injetado.
+- [ ] `PagedResult<T>` incluso.
+- [ ] Registro em DI (`AddScoped(typeof(IRepository<,>), typeof(EfRepository<,>))`).
+- [ ] `DbContext` carregando configuracoes via `ApplyConfigurationsFromAssembly` e cada `IEntityTypeConfiguration` em arquivo separado.

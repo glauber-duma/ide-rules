@@ -1,26 +1,27 @@
 Voce e um engenheiro de software senior especialista em C# e arquitetura.
 
-Tarefa: gerar uma rule (.mdc) para projetos "aplicacao console completa com observabilidade com foco em integracao de sistemas legados (processos batch)".
+Tarefa: gerar a rule (.mdc) "console-batch-complete-observability.mdc" para "aplicacao console completa com observabilidade com foco em integracao de sistemas legados (processos batch)".
 A rule deve seguir o padrao do repositorio e ser compatível com VS Code e Cursor.
 
-Requisitos:
-- Use .NET 9 e C#.
-- Console app batch com resiliencia (Polly), retry, idempotencia, orquestracao de jobs.
-- Observabilidade com OpenTelemetry + Serilog.
-- Incluir testes unitarios e de integracao (quando aplicavel) usando xUnit, Moq e FluentAssertions.
-- Use Repository + Unit of Work, DI, SOLID, DRY, KISS.
-- Use MediatR.
-- Cite pacotes open source recomendados.
-- Incluir exemplos de codigo enxutos e prontos.
+Requisitos obrigatórios:
+- .NET 9, C#, Console app batch.
+- Resiliencia (Polly): retry, circuit breaker, timeout.
+- Orquestração de jobs, idempotência, processamento paralelo.
+- Observabilidade: Serilog + OpenTelemetry.
+- MediatR para comandos.
+- Dockerfile opcional.
+
+Regras compartilhadas (usar @-notação):
+- @csharp-style-guide, @entity-validator, @efcore-repository, @dapper-repository, @fluentvalidation, @use-cases, @unit-testing, @docker-containers
 
 Formato esperado da rule:
 ---
 Rule: console-batch-complete-observability.mdc
-Description: Padroes para console app batch completo com observabilidade e integracao legada.
-globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json"]
-rules: @csharp-style-guide
+Description: Padroes para aplicacoes console completas (batch) com observabilidade, resiliencia e conteinerizacao.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/Dockerfile"]
+rules: @csharp-style-guide, @entity-validator, @efcore-repository, @dapper-repository, @fluentvalidation, @use-cases, @unit-testing, @docker-containers
 alwaysApply: false
-tags: ["csharp", "console", "batch", "observability", "resilience"]
+tags: ["csharp", "console", "batch", "observability", "resilience", "docker"]
 Author: Glauber Duma
 Created: 2026-02
 ---
@@ -28,10 +29,12 @@ Created: 2026-02
 Inclua secoes:
 1) Objetivo
 2) Estrutura de pastas
-3) Pacotes recomendados
-4) Configuracao
-5) Observabilidade
-6) Processamento em lote e resiliencia
-7) Camadas e padroes
-8) Testes
-9) Checklist de boas praticas
+3) Pacotes (Polly, Serilog, OpenTelemetry, MediatR, Quartz.NET opcional)
+4) Configuracao (Program.cs com Host, Polly, DI)
+5) Entidades/Repos/Validators - referências
+6) Jobs com resiliencia (BackgroundService + Polly)
+7) Orquestração (MediatR pipelines, processamento paralelo, idempotência)
+8) Observabilidade (Serilog + OTel + traces)
+9) Dockerfile
+10) Testes - referência @unit-testing
+11) Checklist

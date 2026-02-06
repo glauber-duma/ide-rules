@@ -1,45 +1,58 @@
----
 Rule: csharp-style-guide.mdc
-Description: Guia para padrões de código C#, inclui nomenclatura, formatação, boas práticas e desenvolvimento em .NET
+Description: Guia para padrões de código C# 12 / .NET 9, inclui nomenclatura, formatação, boas práticas e features modernas
 globs: ["**/*.cs"]
-rules: @csharp-project-structure
+rules: @csharp-project-structure, @entity-validator, @efcore-repository, @dapper-repository, @fluentvalidation, @use-cases, @unit-testing
 alwaysApply: false
-tags: ["csharp", "style", "best-practices"]
+tags: ["csharp", "dotnet9", "csharp12", "style", "best-practices"]
 Author: Glauber Duma
 Created: 2026-01
----
+Updated: 2026-02
 
-# C# Style Guide - Padrões e Boas Práticas
+# C# Style Guide - Padrões e Boas Práticas (.NET 9 / C# 12)
 
-Este guia estabelece padrões consistentes para escrita de código C#, garantindo legibilidade, manutenibilidade e qualidade em todos os projetos.
+Este guia estabelece padrões consistentes para escrita de código C# moderno, garantindo legibilidade, manutenibilidade e uso das features mais recentes do .NET 9 e C# 12.
 
 ---
 
 ## 1. 🎯 Convenções de Nomenclatura
 
-### 1.1. Namespaces
+### 1.1. Namespaces e Global Usings
 
 ```csharp
-// ✅ CORRETO - Namespaces seguem PascalCase e refletem estrutura
-namespace MinhaEmpresa.MinhasAplicacoes.MinhasBibliotecas
-{
-    // código
-}
+// ✅ CORRETO - File-scoped namespaces (C# 10+) - PREFERIDO
+namespace Company.Product.Feature.Domain;
 
+// Todas as declarações do arquivo aqui
+public class User { }
+public class Order { }
+
+// ✅ CORRETO - Namespace tradicional (quando necessário múltiplos namespaces)
 namespace Company.Product.Feature.Domain
 {
     // Domain entities
+    public class User { }
 }
 
 namespace Company.Product.Feature.Application
 {
-    // Application services
+    // Application services  
+    public class UserService { }
 }
 
 // ❌ INCORRETO - Nomenclatura inadequada
-namespace minhaempresa.minhasaplicacoes  // lowercase
-namespace Minha_Empresa.Minhas_Aplicacoes  // underscore
-namespace Company.Product.Feature.domain  // mixed case
+namespace minhaempresa.minhasaplicacoes;  // lowercase
+namespace Minha_Empresa.Minhas_Aplicacoes;  // underscore
+namespace Company.Product.Feature.domain;  // mixed case
+
+// ✅ CORRETO - Global Usings (C# 10+)
+// Arquivo: GlobalUsings.cs na raiz do projeto
+global using System;
+global using System.Collections.Generic;
+global using System.Linq;
+global using System.Threading;
+global using System.Threading.Tasks;
+global using Microsoft.Extensions.Logging;
+global using Microsoft.Extensions.DependencyInjection;
 ```
 
 ### 1.2. Classes e Interfaces
@@ -80,101 +93,101 @@ public class userService { }  // camelCase em classe
 ### 1.3. Modelos, DTOs e Entidades
 
 ```csharp
-// ✅ CORRETO - Modelos de domínio
+// ✅ CORRETO - DTOs como RECORDS imutáveis (C# 9+) - PREFERIDO
 
-// Entidades de domínio
-public class UserEntity
+// DTOs (Data Transfer Objects) - Use records para imutabilidade
+public record UserRequest
 {
-    public int Id { get; set; }
-    public string FirstName { get; set; } = string.Empty;
-    public string LastName { get; set; } = string.Empty;
-    public DateTime CreatedAt { get; set; }
-    public DateTime? UpdatedAt { get; set; }
+    public required string FirstName { get; init; }
+    public required string LastName { get; init; }
+    public required string Email { get; init; }
 }
 
-// DTOs (Data Transfer Objects)
-public class UserRequest
+public record UserResponse(
+    int Id,
+    string FirstName,
+    string LastName,
+    DateTime CreatedAt)
 {
-    public string FirstName { get; set; } = string.Empty;
-    public string LastName { get; set; } = string.Empty;
-    public string Email { get; set; } = string.Empty;
-}
-
-public class UserResponse
-{
-    public int Id { get; set; }
-    public string FirstName { get; set; } = string.Empty;
-    public string LastName { get; set; } = string.Empty;
     public string FullName => $"{FirstName} {LastName}";
-    public DateTime CreatedAt { get; set; }
 }
 
-// ViewModels para UI
-public class UserViewModel
+// ViewModels para UI - Records também
+public record UserViewModel(
+    int Id,
+    string DisplayName,
+    bool IsActive);
+
+// ✅ CORRETO - Records com validation (required C# 11+)
+public record CreateOrderRequest
 {
-    public int Id { get; set; }
-    public string DisplayName { get; set; } = string.Empty;
-    public bool IsActive { get; set; }
+    public required Guid UserId { get; init; }
+    public required List<OrderItemRequest> Items { get; init; }
+    public string? Notes { get; init; }
 }
 
-// ❌ INCORRETO - Nomenclaturas inadequadas
-public class user_entity { }  // snake_case
-public class UserDto { }  // Prefira sufixos completos: UserRequest, UserResponse
-public class UserData { }  // Vago, prefira Entity, Request, Response
-```
+public record OrderItemRequest(
+    Guid ProductId,
+    int Quantity,
+    decimal Price);
 
-### 1.4. Entidades com Nullable Reference Types
-
-```csharp
-// ✅ CORRETO - Entidades com nullable appropriado
-
-// Entidade com propriedades nullable quando apropriado
-public class UserEntity
+// ✅ CORRETO - Records com valores padrão
+public record SearchRequest
 {
-    public int Id { get; set; }  // IDs geralmente não são nullable
-    public string FirstName { get; set; } = string.Empty;  // Required
-    public string LastName { get; set; } = string.Empty;   // Required
-    public string? MiddleName { get; set; }  // Optional
-    public DateTime CreatedAt { get; set; }
-    public DateTime? UpdatedAt { get; set; }  // Pode ser null
-    public DateTime? DeletedAt { get; set; }  // Soft delete
+    public string? SearchTerm { get; init; }
+    public int PageNumber { get; init; } = 1;
+    public int PageSize { get; init; } = 10;
+    public bool IncludeInactive { get; init; } = false;
 }
 
-// ✅ CORRETO - Validação com FluentValidation
-using FluentValidation;
-
-public class UserRequestValidator : AbstractValidator<UserRequest>
+// ✅ CORRETO - Entidades de domínio (consulte @entity-validator para padrão completo)
+public class UserEntity  // Classes para entidades mutáveis com comportamento
 {
-    public UserRequestValidator()
+    public int Id { get; private set; }
+    public string FirstName { get; private set; } = string.Empty;
+    public string LastName { get; private set; } = string.Empty;
+    public DateTime CreatedAt { get; private set; }
+    public DateTime? UpdatedAt { get; private set; }
+
+    // Construtor com validação
+    public UserEntity(string firstName, string lastName)
     {
-        RuleFor(x => x.FirstName)
-            .NotEmpty()
-            .WithMessage("First name is required")
-            .MaximumLength(100)
-            .WithMessage("First name must not exceed 100 characters");
+        FirstName = firstName;
+        LastName = lastName;
+        CreatedAt = DateTime.UtcNow;
+    }
 
-        RuleFor(x => x.LastName)
-            .NotEmpty()
-            .WithMessage("Last name is required")
-            .MaximumLength(100)
-            .WithMessage("Last name must not exceed 100 characters");
-
-        RuleFor(x => x.Email)
-            .NotEmpty()
-            .WithMessage("Email is required")
-            .EmailAddress()
-            .WithMessage("Invalid email format");
+    // Métodos de mutação com validação
+    public void UpdateName(string firstName, string lastName)
+    {
+        FirstName = firstName;
+        LastName = lastName;
+        UpdatedAt = DateTime.UtcNow;
     }
 }
 
-// ❌ INCORRETO - Propriedades não seguem convenções
-public class UserEntity
+// ❌ INCORRETO - Nomenclaturas e patterns inadequados
+public class UserDto { }  // Use record, não class, para DTOs
+public class UserRequest   // Use record para imutabilidade
 {
-    public int id { get; set; }  // camelCase
-    public string first_name { get; set; }  // snake_case
-    public string Last_Name { get; set; }  // Mixed case
+    public string FirstName { get; set; } = string.Empty;  // Mutável
+    public string LastName { get; set; } = string.Empty;
+}
+
+// ❌ INCORRETO - Record mutável
+public record UserRequest  
+{
+    public string FirstName { get; set; }  // ❌ Use init, não set
+    public string LastName { get; set; }
 }
 ```
+
+### 1.4. Entidades
+
+Para o modelo padrao de entidade EF Core com setters privados, construtores validados via FluentValidation 
+e metodos que revalidam, consulte a rule compartilhada `entity-validator.mdc`. 
+Mantenha nullable reference types conforme necessidade do dominio e siga o snippet centralizado para evitar 
+divergencias.
 
 ### 1.5. Métodos
 
@@ -249,7 +262,63 @@ public class UserService
 
 ---
 
-## 2. 📐 Estrutura de Classes
+## 2. 📐 Estrutura de Classes e Records
+
+### 2.0. Primary Constructors (C# 12)
+
+```csharp
+// ✅ CORRETO - Primary constructors para classes (C# 12)
+public class UserService(IUserRepository repository, ILogger<UserService> logger) : IUserService
+{
+    // Parâmetros do primary constructor são automaticamente campos
+    public async Task<User> GetUserAsync(int id)
+    {
+        logger.LogInformation("Getting user {UserId}", id);
+        return await repository.GetByIdAsync(id);
+    }
+}
+
+// ✅ CORRETO - Primary constructor com validação
+public class EmailService(IEmailSender sender, ILogger<EmailService> logger) : IEmailService
+{
+    private readonly IEmailSender _sender = sender ?? throw new ArgumentNullException(nameof(sender));
+    private readonly ILogger<EmailService> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+
+    public async Task SendAsync(string to, string subject, string body)
+    {        _logger.LogInformation("Sending email to {Recipient}", to);
+        await _sender.SendEmailAsync(to, subject, body);
+    }
+}
+
+// ✅ CORRETO - Primary constructor com propriedades adicionais
+public class CacheService(IMemoryCache cache, IOptions<CacheOptions> options) : ICacheService
+{
+    private readonly CacheOptions _options = options.Value;
+    public int DefaultExpirationMinutes { get; init; } = 30;
+
+    public void Set<T>(string key, T value)
+    {
+        var expiration = TimeSpan.FromMinutes(_options.ExpirationMinutes ?? DefaultExpirationMinutes);
+        cache.Set(key, value, expiration);
+    }
+}
+
+// ✅ CORRETO - Records com primary constructor (padrão)
+public record UserDto(int Id, string Name, string Email);
+
+// ❌ EVITE - Constructor tradicional quando primary é mais limpo
+public class UserService : IUserService
+{
+    private readonly IUserRepository _repository;
+    private readonly ILogger<UserService> _logger;
+
+    public UserService(IUserRepository repository, ILogger<UserService> logger)
+    {
+        _repository = repository;
+        _logger = logger;
+    }
+}
+```
 
 ### 2.1. Organização de Members
 
@@ -399,23 +468,47 @@ public class UserService : IUserService, IDisposable
 }
 ```
 
-### 2.2. Builder Pattern
+### 2.2. Builder Pattern (Modernizado)
 
 ```csharp
-// ✅ CORRETO - Implementação do Builder Pattern
+// ✅ CORRETO - Init-only properties com collection expressions (C# 12)
+public record EmailMessage
+{
+    public required string From { get; init; }
+    public required string To { get; init; }
+    public required string Subject { get; init; }
+    public required string Body { get; init; }
+    public List<string> Cc { get; init; } = [];
+    public List<string> Bcc { get; init; } = [];
+    public List<Attachment> Attachments { get; init; } = [];
+    public EmailPriority Priority { get; init; }
+    public bool IsHtml { get; init; }
+}
 
-// Entidade complexa
+// ✅ CORRETO - Uso com object initializer (mais simples que Builder)
+var email = new EmailMessage
+{
+    From = "sender@example.com",
+    To = "recipient@example.com",
+    Subject = "Important Message",
+    Body = "This is the email body",
+    Cc = ["cc1@example.com", "cc2@example.com"],
+    Priority = EmailPriority.High,
+    IsHtml = true
+};
+
+// ✅ CORRETO - Builder pattern tradicional quando há validação complexa
 public class EmailMessage
 {
-    public string From { get; set; } = string.Empty;
-    public string To { get; set; } = string.Empty;
-    public string Subject { get; set; } = string.Empty;
-    public string Body { get; set; } = string.Empty;
-    public List<string> Cc { get; set; } = new();
-    public List<string> Bcc { get; set; } = new();
-    public List<Attachment> Attachments { get; set; } = new();
-    public EmailPriority Priority { get; set; }
-    public bool IsHtml { get; set; }
+    public string From { get; init; } = string.Empty;
+    public string To { get; init; } = string.Empty;
+    public string Subject { get; init; } = string.Empty;
+    public string Body { get; init; } = string.Empty;
+    public List<string> Cc { get; init; } = [];
+    public List<string> Bcc { get; init; } = [];
+    public List<Attachment> Attachments { get; init; } = [];
+    public EmailPriority Priority { get; init; }
+    public bool IsHtml { get; init; }
 }
 
 // Builder para a entidade
@@ -452,21 +545,24 @@ public class EmailMessageBuilder
         return this;
     }
 
-    public EmailMessageBuilder AddCc(string cc)
+    public EmailMessageBuilder AddCc(params string[] cc)
     {
-        _message.Cc.Add(cc);
+        foreach (var address in cc)
+            _message.Cc.Add(address);
         return this;
     }
 
-    public EmailMessageBuilder AddBcc(string bcc)
+    public EmailMessageBuilder AddBcc(params string[] bcc)
     {
-        _message.Bcc.Add(bcc);
+        foreach (var address in bcc)
+            _message.Bcc.Add(address);
         return this;
     }
 
-    public EmailMessageBuilder AddAttachment(Attachment attachment)
+    public EmailMessageBuilder AddAttachment(params Attachment[] attachments)
     {
-        _message.Attachments.Add(attachment);
+        foreach (var attachment in attachments)
+            _message.Attachments.Add(attachment);
         return this;
     }
 
@@ -510,15 +606,26 @@ var email = new EmailMessageBuilder()
     .Build();
 ```
 
-### 2.3. Fluent Interface
+### 2.3. Fluent Interface e Collection Expressions
 
 ```csharp
-// ✅ CORRETO - Interface fluente para configuração
+// ✅ CORRETO - Collection expressions (C# 12)
+List<string> names = ["Alice", "Bob", "Charlie"];
+int[] numbers = [1, 2, 3, 4, 5];
+string[] empty = [];
 
+// ✅ CORRETO - Spread operator em collections
+int[] first = [1, 2, 3];
+int[] second = [4, 5, 6];
+int[] combined = [..first, ..second];  // [1, 2, 3, 4, 5, 6]
+
+List<string> moreNames = [..names, "David", "Eve"];
+
+// ✅ CORRETO - Interface fluente para configuração
 public class QueryBuilder<T> where T : class
 {
-    private readonly List<string> _includes = new();
-    private readonly List<string> _orderBy = new();
+    private readonly List<string> _includes = [];
+    private readonly List<string> _orderBy = [];
     private int? _take;
     private int? _skip;
 
@@ -620,33 +727,6 @@ public interface IService<T> : IDisposable where T : class
     Task<ValidationResult> ValidateAsync(T entity, CancellationToken cancellationToken = default);
 }
 
-// Interface específica para repositórios
-public interface IRepository<T> where T : class
-{
-    // Queries
-    Task<T?> GetByIdAsync(int id);
-    Task<IEnumerable<T>> GetAllAsync();
-    Task<IEnumerable<T>> FindAsync(Expression<Func<T, bool>> predicate);
-
-    // Commands
-    Task AddAsync(T entity);
-    void Update(T entity);
-    void Delete(T entity);
-
-    // Unit of Work
-    Task<int> SaveChangesAsync();
-    bool Exists(int id);
-}
-
-// Interface para Unit of Work
-public interface IUnitOfWork : IDisposable
-{
-    IUserRepository Users { get; }
-    IOrderRepository Orders { get; }
-
-    Task<int> CommitAsync();
-    Task RollbackAsync();
-}
 ```
 
 ### 3.2. Interface Segregation
@@ -695,261 +775,19 @@ public interface IBloatedRepository<T> where T : class
 
 ### 4.1. Entity Framework Core
 
-```csharp
-// ✅ CORRETO - Padrão Repository com Unit of Work
-
-// DbContext
-public class ApplicationDbContext : DbContext
-{
-    public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
-        : base(options)
-    {
-    }
-
-    public DbSet<UserEntity> Users { get; set; } = null!;
-    public DbSet<OrderEntity> Orders { get; set; } = null!;
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        base.OnModelCreating(modelBuilder);
-
-        // Configurações de entidades
-        modelBuilder.ApplyConfigurationsFromAssembly(typeof(ApplicationDbContext).Assembly);
-    }
-}
-
-// Configuração de entidade
-public class UserEntityConfiguration : IEntityTypeConfiguration<UserEntity>
-{
-    public void Configure(EntityTypeBuilder<UserEntity> builder)
-    {
-        builder.ToTable("Users");
-
-        builder.HasKey(e => e.Id);
-
-        builder.Property(e => e.FirstName)
-            .IsRequired()
-            .HasMaxLength(100);
-
-        builder.Property(e => e.LastName)
-            .IsRequired()
-            .HasMaxLength(100);
-
-        builder.Property(e => e.Email)
-            .IsRequired()
-            .HasMaxLength(255);
-
-        builder.HasIndex(e => e.Email)
-            .IsUnique();
-
-        builder.Property(e => e.CreatedAt)
-            .IsRequired();
-    }
-}
-
-// Repository genérico
-public class Repository<T> : IRepository<T> where T : class
-{
-    protected readonly ApplicationDbContext _context;
-    protected readonly DbSet<T> _dbSet;
-
-    public Repository(ApplicationDbContext context)
-    {
-        _context = context;
-        _dbSet = context.Set<T>();
-    }
-
-    public virtual async Task<T?> GetByIdAsync(int id)
-    {
-        return await _dbSet.FindAsync(id);
-    }
-
-    public virtual async Task<IEnumerable<T>> GetAllAsync()
-    {
-        return await _dbSet.ToListAsync();
-    }
-
-    public virtual async Task<IEnumerable<T>> FindAsync(Expression<Func<T, bool>> predicate)
-    {
-        return await _dbSet.Where(predicate).ToListAsync();
-    }
-
-    public virtual async Task AddAsync(T entity)
-    {
-        await _dbSet.AddAsync(entity);
-    }
-
-    public virtual void Update(T entity)
-    {
-        _dbSet.Update(entity);
-    }
-
-    public virtual void Delete(T entity)
-    {
-        _dbSet.Remove(entity);
-    }
-
-    public virtual async Task<int> SaveChangesAsync()
-    {
-        return await _context.SaveChangesAsync();
-    }
-
-    public virtual bool Exists(int id)
-    {
-        return _dbSet.Find(id) != null;
-    }
-}
-
-// Repository específico
-public class UserRepository : Repository<UserEntity>, IUserRepository
-{
-    public UserRepository(ApplicationDbContext context) : base(context)
-    {
-    }
-
-    public async Task<UserEntity?> GetByEmailAsync(string email)
-    {
-        return await _dbSet.FirstOrDefaultAsync(u => u.Email == email);
-    }
-
-    public async Task<IEnumerable<UserEntity>> GetActiveUsersAsync()
-    {
-        return await _dbSet
-            .Where(u => u.IsActive)
-            .OrderBy(u => u.LastName)
-            .ToListAsync();
-    }
-}
-
-// Unit of Work
-public class UnitOfWork : IUnitOfWork
-{
-    private readonly ApplicationDbContext _context;
-    private IUserRepository? _userRepository;
-    private IOrderRepository? _orderRepository;
-
-    public UnitOfWork(ApplicationDbContext context)
-    {
-        _context = context;
-    }
-
-    public IUserRepository Users => 
-        _userRepository ??= new UserRepository(_context);
-
-    public IOrderRepository Orders => 
-        _orderRepository ??= new OrderRepository(_context);
-
-    public async Task<int> CommitAsync()
-    {
-        return await _context.SaveChangesAsync();
-    }
-
-    public async Task RollbackAsync()
-    {
-        await Task.Run(() =>
-        {
-            foreach (var entry in _context.ChangeTracker.Entries())
-            {
-                entry.State = EntityState.Detached;
-            }
-        });
-    }
-
-    public void Dispose()
-    {
-        _context.Dispose();
-    }
-}
-```
+Para padronizar repositorio generico (`IRepository<TClass, TType>` / `EfRepository<TClass, TType>`), 
+DbContext` e configuracoes via `IEntityTypeConfiguration` (um arquivo por entidade, nada inline no DbContext), 
+utilize a rule compartilhada `efcore-repository.mdc`. 
+O `DbContext` deve carregar mapeamentos com `ApplyConfigurationsFromAssembly`. 
+Evite duplicar snippets aqui; mantenha as implementacoes centralizadas.
 
 ### 4.2. Dapper (Console Applications)
 
-```csharp
-// ✅ CORRETO - Uso do Dapper para aplicações console
-
-public class DapperUserRepository : IUserRepository
-{
-    private readonly string _connectionString;
-
-    public DapperUserRepository(IConfiguration configuration)
-    {
-        _connectionString = configuration.GetConnectionString("DefaultConnection") 
-            ?? throw new InvalidOperationException("Connection string not found");
-    }
-
-    public async Task<UserEntity?> GetByIdAsync(int id)
-    {
-        using var connection = new SqlConnection(_connectionString);
-        
-        const string sql = @"
-            SELECT Id, FirstName, LastName, Email, CreatedAt, UpdatedAt
-            FROM Users
-            WHERE Id = @Id";
-
-        return await connection.QueryFirstOrDefaultAsync<UserEntity>(sql, new { Id = id });
-    }
-
-    public async Task<IEnumerable<UserEntity>> GetAllAsync()
-    {
-        using var connection = new SqlConnection(_connectionString);
-        
-        const string sql = @"
-            SELECT Id, FirstName, LastName, Email, CreatedAt, UpdatedAt
-            FROM Users
-            ORDER BY LastName, FirstName";
-
-        return await connection.QueryAsync<UserEntity>(sql);
-    }
-
-    public async Task<int> AddAsync(UserEntity user)
-    {
-        using var connection = new SqlConnection(_connectionString);
-        
-        const string sql = @"
-            INSERT INTO Users (FirstName, LastName, Email, CreatedAt)
-            VALUES (@FirstName, @LastName, @Email, @CreatedAt);
-            SELECT CAST(SCOPE_IDENTITY() as int)";
-
-        return await connection.ExecuteScalarAsync<int>(sql, user);
-    }
-
-    public async Task UpdateAsync(UserEntity user)
-    {
-        using var connection = new SqlConnection(_connectionString);
-        
-        const string sql = @"
-            UPDATE Users
-            SET FirstName = @FirstName,
-                LastName = @LastName,
-                Email = @Email,
-                UpdatedAt = @UpdatedAt
-            WHERE Id = @Id";
-
-        await connection.ExecuteAsync(sql, user);
-    }
-
-    public async Task DeleteAsync(int id)
-    {
-        using var connection = new SqlConnection(_connectionString);
-        
-        const string sql = "DELETE FROM Users WHERE Id = @Id";
-
-        await connection.ExecuteAsync(sql, new { Id = id });
-    }
-
-    public async Task<IEnumerable<UserEntity>> GetUsersByNameAsync(string name)
-    {
-        using var connection = new SqlConnection(_connectionString);
-        
-        const string sql = @"
-            SELECT Id, FirstName, LastName, Email, CreatedAt, UpdatedAt
-            FROM Users
-            WHERE FirstName LIKE @Name OR LastName LIKE @Name";
-
-        return await connection.QueryAsync<UserEntity>(sql, new { Name = $"%{name}%" });
-    }
-}
-```
+Para padronizar repositório Dapper para aplicações console/simples usando o mesmo contrato (
+`IRepository<TClass, TType>`) do EF, utilize a rule compartilhada `dapper-repository.mdc`.
+Ela concentra o snippet com conexões curtas (using/await), parâmetros nomeados para evitar SQL injection e 
+estrutura idêntica ao repositório EF para manter a troca plugável. 
+Evite duplicar código aqui; referencie o snippet centralizado.
 
 ### 4.3. Serilog e Prometheus
 
@@ -1107,141 +945,7 @@ public class UserService : IUserService
 
 ### 4.4. FluentValidation
 
-```csharp
-// ✅ CORRETO - Validação com FluentValidation
-
-// Validador para UserRequest
-public class UserRequestValidator : AbstractValidator<UserRequest>
-{
-    public UserRequestValidator()
-    {
-        RuleFor(x => x.FirstName)
-            .NotEmpty()
-            .WithMessage("First name is required")
-            .MaximumLength(100)
-            .WithMessage("First name must not exceed 100 characters")
-            .Matches(@"^[a-zA-Z\s]+$")
-            .WithMessage("First name must contain only letters");
-
-        RuleFor(x => x.LastName)
-            .NotEmpty()
-            .WithMessage("Last name is required")
-            .MaximumLength(100)
-            .WithMessage("Last name must not exceed 100 characters");
-
-        RuleFor(x => x.Email)
-            .NotEmpty()
-            .WithMessage("Email is required")
-            .EmailAddress()
-            .WithMessage("Invalid email format")
-            .Must(BeUniqueEmail)
-            .WithMessage("Email already exists");
-
-        RuleFor(x => x.DateOfBirth)
-            .NotEmpty()
-            .WithMessage("Date of birth is required")
-            .Must(BeAtLeast18YearsOld)
-            .WithMessage("User must be at least 18 years old");
-    }
-
-    private bool BeUniqueEmail(string email)
-    {
-        // Verificar no banco se email já existe
-        // Esta é uma simplificação - idealmente injetar repositório
-        return true;
-    }
-
-    private bool BeAtLeast18YearsOld(DateTime dateOfBirth)
-    {
-        var age = DateTime.Today.Year - dateOfBirth.Year;
-        if (dateOfBirth.Date > DateTime.Today.AddYears(-age))
-            age--;
-
-        return age >= 18;
-    }
-}
-
-// Validador com regras complexas
-public class OrderRequestValidator : AbstractValidator<OrderRequest>
-{
-    public OrderRequestValidator()
-    {
-        RuleFor(x => x.CustomerId)
-            .GreaterThan(0)
-            .WithMessage("Customer ID must be greater than 0");
-
-        RuleFor(x => x.Items)
-            .NotEmpty()
-            .WithMessage("Order must have at least one item");
-
-        RuleForEach(x => x.Items)
-            .SetValidator(new OrderItemValidator());
-
-        RuleFor(x => x.TotalAmount)
-            .GreaterThan(0)
-            .WithMessage("Total amount must be greater than 0")
-            .Must((order, total) => total == order.Items.Sum(i => i.Quantity * i.UnitPrice))
-            .WithMessage("Total amount does not match sum of items");
-    }
-}
-
-public class OrderItemValidator : AbstractValidator<OrderItem>
-{
-    public OrderItemValidator()
-    {
-        RuleFor(x => x.ProductId)
-            .GreaterThan(0);
-
-        RuleFor(x => x.Quantity)
-            .GreaterThan(0)
-            .WithMessage("Quantity must be greater than 0")
-            .LessThanOrEqualTo(100)
-            .WithMessage("Quantity cannot exceed 100");
-
-        RuleFor(x => x.UnitPrice)
-            .GreaterThan(0)
-            .WithMessage("Unit price must be greater than 0");
-    }
-}
-
-// Registro no DI
-public static class ServiceCollectionExtensions
-{
-    public static IServiceCollection AddValidators(this IServiceCollection services)
-    {
-        services.AddValidatorsFromAssemblyContaining<UserRequestValidator>();
-        return services;
-    }
-}
-
-// Uso em um service
-public class UserService : IUserService
-{
-    private readonly IValidator<UserRequest> _validator;
-
-    public UserService(IValidator<UserRequest> validator)
-    {
-        _validator = validator;
-    }
-
-    public async Task CreateUserAsync(UserRequest request)
-    {
-        // Validar
-        var validationResult = await _validator.ValidateAsync(request);
-
-        if (!validationResult.IsValid)
-        {
-            var errors = validationResult.Errors
-                .Select(e => new ValidationError(e.PropertyName, e.ErrorMessage))
-                .ToList();
-
-            throw new ValidationException("Validation failed", errors);
-        }
-
-        // Continuar com a lógica
-    }
-}
-```
+Para padronizar validadores FluentValidation (DTOs/entidades) e registro no DI, utilize a rule compartilhada `fluentvalidation.mdc`. Ela centraliza exemplos de `AbstractValidator<T>`, uso de `RuleForEach` para coleções, registro via `AddValidatorsFromAssemblyContaining<>()` e padrao de uso com `IValidator<T>`. Evite duplicar snippets aqui; mantenha as implementacoes no arquivo dedicado.
 
 ### 4.5. Injeção de Dependência
 
@@ -1445,7 +1149,7 @@ public async Task<User> GetUserAsync(int id)
     return user;
 }
 
-// ❌ INCORRETO - Operações síncronas bloqueantes
+// ❌ INCORRETO - Operações síncronas bloqueantes  
 public UserResponse GetUser(int id)
 {
     var user = _userRepository.GetByIdAsync(id).Result;  // ❌ Deadlock!
@@ -1776,7 +1480,241 @@ public class UsersController : ControllerBase
 
 ---
 
-## 6. 📋 Style Guide Checklist
+## 6. � Features Modernas do C# 12 / .NET 9
+
+### 6.1. Collection Expressions
+
+```csharp
+// ✅ CORRETO - Collection expressions (C# 12)
+List<int> numbers = [1, 2, 3, 4, 5];
+string[] names = ["Alice", "Bob", "Charlie"];
+int[] empty = [];
+
+// Spread operator
+int[] first = [1, 2, 3];
+int[] second = [4, 5, 6];
+int[] combined = [..first, ..second];
+
+// ❌ ANTIGAS - Evite
+var numbers = new List<int> { 1, 2, 3, 4, 5 };
+var names = new[] { "Alice", "Bob", "Charlie" };
+var empty = new int[0];
+```
+
+### 6.2. Primary Constructors
+
+```csharp
+// ✅ CORRETO - Primary constructors (C# 12)
+public class OrderService(IOrderRepository repository, ILogger<OrderService> logger)
+{
+    public async Task<Order> CreateOrderAsync(CreateOrderRequest request)
+    {
+        logger.LogInformation("Creating order");
+        return await repository.AddAsync(new Order(request));
+    }
+}
+
+// ❌ ANTIGO - Constructor tradicional
+public class OrderService
+{
+    private readonly IOrderRepository _repository;
+    private readonly ILogger<OrderService> _logger;
+    
+    public OrderService(IOrderRepository repository, ILogger<OrderService> logger)
+    {
+        _repository = repository;
+        _logger = logger;
+    }
+}
+```
+
+### 6.3. Required Members
+
+```csharp
+// ✅ CORRETO - Required members (C# 11)
+public class Person
+{
+    public required string FirstName { get; init; }
+    public required string LastName { get; init; }
+    public string? MiddleName { get; init; }
+}
+
+var person = new Person
+{
+    FirstName = "John",
+    LastName = "Doe"
+    // MiddleName é opcional
+};
+
+// Erro de compilação se não fornecer required:
+// var invalid = new Person { FirstName = "John" };  // ❌ Erro!
+```
+
+### 6.4. File-Scoped Namespaces
+
+```csharp
+// ✅ CORRETO - File-scoped namespace (C# 10)
+namespace Company.Product.Feature.Services;
+
+public class UserService { }
+public class OrderService { }
+
+// ❌ ANTIGO - Namespace com chaves
+namespace Company.Product.Feature.Services
+{
+    public class UserService { }
+    public class OrderService { }
+}
+```
+
+### 6.5. Global Usings
+
+```csharp
+// GlobalUsings.cs na raiz do projeto
+global using System;
+global using System.Collections.Generic;
+global using System.Linq;
+global using System.Threading.Tasks;
+global using Microsoft.Extensions.Logging;
+global using Microsoft.Extensions.DependencyInjection;
+
+// Agora não precisa declarar em cada arquivo
+```
+
+### 6.6. Pattern Matching Moderno
+
+```csharp
+// ✅ CORRETO - List patterns (C# 11)
+if (numbers is [1, 2, 3])
+{
+    Console.WriteLine("Exatamente 1, 2, 3");
+}
+
+if (names is [var first, .., var last])
+{
+    Console.WriteLine($"Primeiro: {first}, Último: {last}");
+}
+
+if (items is [var only])
+{
+    Console.WriteLine($"Lista com apenas: {only}");
+}
+
+// Pattern matching em switch
+string GetDescription(object obj) => obj switch
+{
+    null => "null",
+    int i when i > 0 => "positive integer",
+    int i when i < 0 => "negative integer",
+    string { Length: 0 } => "empty string",
+    string s => $"string: {s}",
+    [] => "empty collection",
+    [var single] => $"single item: {single}",
+    [var first, .., var last] => $"first: {first}, last: {last}",
+    _ => "unknown"
+};
+```
+
+### 6.7. Records e With Expressions
+
+```csharp
+// ✅ CORRETO - Records imutáveis
+public record Person(string FirstName, string LastName, int Age);
+
+var person = new Person("John", "Doe", 30);
+
+// With expression para criar cópia modificada
+var olderPerson = person with { Age = 31 };
+var renamed = person with { FirstName = "Jane" };
+
+// Deconstruction
+var (firstName, lastName, age) = person;
+```
+
+### 6.8. Target-Typed New
+
+```csharp
+// ✅ CORRETO - Target-typed new (C# 9)
+Person person = new("John", "Doe", 30);
+List<string> names = new() { "Alice", "Bob" };
+Dictionary<string, int> ages = new()
+{
+    ["Alice"] = 25,
+    ["Bob"] = 30
+};
+
+// ❌ ANTIGO - Tipo repetido
+Person person = new Person("John", "Doe", 30);
+List<string> names = new List<string> { "Alice", "Bob" };
+```
+
+### 6.9. Null-Coalescing Assignment
+
+```csharp
+// ✅ CORRETO - ??= operator (C# 8)
+string? name = null;
+name ??= "Default Name";  // Atribui se null
+
+List<string>? items = null;
+items ??= [];
+
+// ❌ ANTIGO
+if (name == null)
+    name = "Default Name";
+```
+
+### 6.10. Switch Expressions
+
+```csharp
+// ✅ CORRETO - Switch expression (C# 8)
+string GetDayType(DayOfWeek day) => day switch
+{
+    DayOfWeek.Saturday or DayOfWeek.Sunday => "Weekend",
+    DayOfWeek.Monday => "Start of week",
+    DayOfWeek.Friday => "Almost weekend!",
+    _ => "Weekday"
+};
+
+// Pattern matching em switch
+static decimal CalculateDiscount(Customer customer) => customer switch
+{
+    { IsPremium: true, YearsActive: > 5 } => 0.20m,
+    { IsPremium: true } => 0.15m,
+    { YearsActive: > 3 } => 0.10m,
+    _ => 0.05m
+};
+
+// ❌ ANTIGO - Switch statement
+string GetDayType(DayOfWeek day)
+{
+    switch (day)
+    {
+        case DayOfWeek.Saturday:
+        case DayOfWeek.Sunday:
+            return "Weekend";
+        case DayOfWeek.Monday:
+            return "Start of week";
+        default:
+            return "Weekday";
+    }
+}
+```
+
+---
+
+## 7. 📋 Style Guide Checklist
+
+### C# Moderno (.NET 9 / C# 12)
+- [ ] File-scoped namespaces para arquivos com único namespace
+- [ ] Global usings no GlobalUsings.cs
+- [ ] Collection expressions `[]` ao invés de `new List<>()`
+- [ ] Primary constructors para classes simples
+- [ ] Required members ao invés de validação manual
+- [ ] Records para DTOs imutáveis
+- [ ] Init-only properties para imutabilidade
+- [ ] Target-typed new quando tipo é óbvio
+- [ ] Switch expressions ao invés de switch statements
+- [ ] Pattern matching moderno
 
 ### Nomenclatura
 - [ ] Namespaces em PascalCase refletem estrutura do projeto
@@ -1833,13 +1771,30 @@ public class UsersController : ControllerBase
 - [ ] Não capturar Exception genérico sem re-throw
 
 ### Testes
-- [ ] Testes unitários para lógica de negócio
-- [ ] Testes de integração para repositórios
-- [ ] Mocks para dependências externas
-- [ ] Cobertura mínima de 80%
+- [ ] Consulte @unit-testing para padrões completos de testes unitários
 
 ---
 
-**Última atualização**: Janeiro 2026  
-**Versão do documento**: 1.0.0  
-**Autor**: Glauber Duma
+**Última atualização**: Fevereiro 2026  
+**Versão do documento**: 2.0.0 (.NET 9 / C# 12)  
+**Autor**: Glauber Duma  
+
+---
+
+## Changelog
+
+### 2.0.0 (Fevereiro 2026)
+- ✅ Atualizado para .NET 9 e C# 12
+- ✅ Adicionadas collection expressions `[]`
+- ✅ Primary constructors para classes
+- ✅ Required members
+- ✅ File-scoped namespaces
+- ✅ Global usings
+- ✅ Records para DTOs
+- ✅ Pattern matching moderno
+- ✅ Switch expressions
+- ✅ Target-typed new
+- ✅ Regra compartilhada de Unit Testing (@unit-testing)
+
+### 1.0.0 (Janeiro 2026)
+- Versão inicial

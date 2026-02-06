@@ -1,13 +1,8 @@
 ---
 Rule: microservices-dapr-simple-observability.mdc
-Description: Padroes para microservicos simples com Dapr e observabilidade.
-globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/dapr/*.yaml"]
-rules: @csharp-style-guide
----
-Rule: microservices-dapr-simple-observability.mdc
 Description: Padroes para microservicos Dapr simples com observabilidade e entrega em containers.
 globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/dapr/**/*.yaml", "**/docker-compose*.yml", "**/Dockerfile"]
-rules: @csharp-style-guide
+rules: @csharp-style-guide, @entity-validator, @efcore-repository, @dapper-repository, @fluentvalidation, @use-cases, @unit-testing, @docker-containers, @api-controllers, @observability
 alwaysApply: false
 tags: ["csharp", "microservices", "dapr", "observability", "docker", "kafka", "redis"]
 Author: Glauber Duma
@@ -26,8 +21,12 @@ src/
     Controllers/
     Program.cs
   Application/
+    Services/
+    DTOs/Validators/
   Domain/
+    Entities/ValueObjects/
   Infrastructure/
+    Data/Repositories/
     Dapr/
     Observability/
 dapr/
@@ -169,7 +168,14 @@ spec:
     value: ""
 ```
 
-## 8) Publicacao/assinatura (exemplo minimo)
+## 8) API Controllers
+Para padrões completos de API controllers REST (BaseApiController, Result Pattern, Problem Details RFC 7807, status codes semânticos, paginação, versionamento), consulte `@api-controllers`.
+
+**Especificidades deste projeto**:
+- Controllers herdam de `BaseApiController` para endpoints REST padrão
+- Para integração Dapr (pub/sub, invocação de serviço, state management), veja exemplo abaixo
+
+## 9) Publicação/assinatura Dapr (exemplo mínimo)
 ```csharp
 [ApiController]
 [Route("events")]
@@ -193,25 +199,36 @@ public class SimpleEventHandler : IEventHandler<SimpleEvent>
 }
 ```
 
-## 9) Observabilidade
-- Logs estruturados com traceId e correlation id.
-- Traces HTTP e Dapr client; exporter OTLP habilitado.
-- Health check simples em `/healthz`.
+## 9) Entidades (EF Core) com validação
+Para padronizar entidades EF Core com setters privados, construtores validados e métodos de mutação que revalidam, utilize a rule compartilhada `entity-validator.mdc`. Ela centraliza o snippet e as orientações para consistência entre projetos.
 
-## 10) Testes
+## 10) Repositório genérico (EF Core)
+Para padronizar o repositório genérico EF Core, utilize a rule compartilhada `efcore-repository.mdc`. Ela centraliza o contrato, implementação, DTO de paginação e orientações de uso.
+
+## 11) Repositório genérico (Dapper) para aplicações simples
+Para padronizar o repositório Dapper para cenários simples, utilize a rule compartilhada `dapper-repository.mdc`. Ela centraliza o contrato, implementação e orientações para uso plugável.
+
+## 13) Observabilidade
+Para padrões completos de observabilidade (Serilog com logs estruturados, OpenTelemetry com traces e metrics, Health Checks), consulte `@observability`.
+
+**Especificidades deste projeto**:
+- Traces incluem Dapr client instrumentation (pub/sub, state management, invocação)
+- Logs com traceId e correlationId
+- Health check básico em `/healthz`
+
+## 14) Testes
+Para padrões de testes (xUnit, Moq, FluentAssertions, Bogus, Testcontainers, cobertura), consulte `@unit-testing`.
+
+**Especificidades deste projeto**:
 - Unit: handlers MediatR e services.
 - Integration: subir docker-compose (redis+kafka+placement) e validar publish/subscribe com Dapr sidecar.
 
-## 11) Checklist
+## 15) Checklist
+- Entidades conforme `entity-validator.mdc`.
+- Repositório genérico conforme `efcore-repository.mdc`.
+- Repositório Dapper conforme `dapper-repository.mdc` (se aplicável).
+- Validadores conforme `fluentvalidation.mdc`.
 - Dockerfile e docker-compose prontos com sidecar Dapr.
 - Componentes Dapr para Kafka e Redis presentes.
 - Observabilidade ativa (logs + traces + healthcheck).
-- Testes unitarios e de integracao cobrindo publish/subscribe.
-
-## 8) Testes
-- Unit: services.
-- Integration: endpoints + Dapr sidecar (quando aplicavel).
-
-## 9) Checklist
-- Componentes Dapr versionados.
-- Observabilidade ativa.
+- Testes conforme `@unit-testing`: cobertura unit e integration em publish/subscribe.

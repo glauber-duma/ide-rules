@@ -1,16 +1,9 @@
 ---
-Rule: microservices-simple-observability.mdc
-Description: Padroes para microservicos simples sem Dapr, com observabilidade.
-globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json"]
-rules: @csharp-style-guide
-alwaysApply: false
-tags: ["csharp", "microservices", "observability"]
-Author: Glauber Duma
 ---
 Rule: microservices-simple-observability.mdc
-Description: Padroes para microservicos simples sem Dapr, com observabilidade e boas praticas essenciais.
+Description: Padroes para microservicos simples sem Dapr, com observabilidade, entidades validadas e repositorio generico.
 globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/Dockerfile", "**/docker-compose*.yml"]
-rules: @csharp-style-guide
+rules: @csharp-style-guide, @entity-validator, @efcore-repository, @dapper-repository, @fluentvalidation, @use-cases, @unit-testing, @docker-containers, @api-controllers, @observability
 alwaysApply: false
 tags: ["csharp", "microservices", "observability", "docker"]
 Author: Glauber Duma
@@ -70,7 +63,24 @@ app.MapControllers();
 app.Run();
 ```
 
-## 5) Dockerfile (API)
+## 5) Entidades (EF Core) com validação
+Para padronizar entidades EF Core com setters privados, construtores validados e métodos de mutação que revalidam, utilize a rule compartilhada `entity-validator.mdc`. Ela centraliza o snippet e as orientações para consistência entre projetos.
+
+## 6) Repositório genérico (EF Core)
+Para padronizar o repositório genérico EF Core, utilize a rule compartilhada `efcore-repository.mdc`. Ela centraliza o contrato, implementação, DTO de paginação e orientações de uso.
+
+## 7) Repositório genérico (Dapper) para aplicações simples
+Para padronizar o repositório Dapper para cenários simples, utilize a rule compartilhada `dapper-repository.mdc`. Ela centraliza o contrato, implementação e orientações para uso plugável.
+
+## 8) API Controllers
+Para padrões completos de API controllers (BaseApiController, Result Pattern, Problem Details RFC 7807, status codes semânticos, paginação, versionamento), consulte `@api-controllers`.
+
+**Especificidades deste projeto**:
+- Controllers herdam de `BaseApiController` e delegam para MediatR
+- Use `HandleResult()` para converter `Result<T>` em `IActionResult`
+- Implementação enxuta focada em microserviços
+
+## 9) Dockerfile (API)
 ```Dockerfile
 FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
 WORKDIR /app
@@ -87,21 +97,26 @@ COPY --from=build /app/publish .
 ENTRYPOINT ["dotnet", "Api.dll"]
 ```
 
-## 6) Observabilidade
-- Logs estruturados com Serilog e traceId.
-- Traces e metrics via OpenTelemetry (exporter OTLP).
-- Health checks em `/healthz`.
+## 10) Observabilidade
+Para padrões completos de observabilidade (Serilog com logs estruturados, OpenTelemetry com traces e metrics, Health Checks), consulte `@observability`.
 
-## 7) Testes
+**Especificidades deste projeto**:
+- Logs com Serilog incluem traceId automaticamente
+- Health checks em `/healthz` (verifica self + database)
+- OpenTelemetry OTLP exporter para collector central
+
+## 11) Testes
+Para padrões de testes (xUnit, Moq, FluentAssertions, Bogus, Testcontainers, cobertura), consulte `@unit-testing`.
+
+**Especificidades deste projeto**:
 - Unit: services, validators.
 - Integration: endpoints com WebApplicationFactory; opcionalmente banco em container.
 
-## 8) Checklist
+## 12) Checklist
+- Entidades conforme `entity-validator.mdc`.
+- Repositório genérico conforme `efcore-repository.mdc`.
+- Repositório Dapper conforme `dapper-repository.mdc` (se aplicável).
+- Validadores conforme `fluentvalidation.mdc`.
 - Dockerfile presente.
 - Observabilidade ativa (logs + traces + healthcheck).
-- Testes unitarios e de integracao basicos prontos.
-- Integration: endpoints.
-
-## 9) Checklist
-- Observabilidade ativa.
-- Sem Dapr.
+- Testes conforme `@unit-testing`: cobertura unit e integration básica nos endpoints.

@@ -74,32 +74,9 @@ Task Delete{Feature}Async(int id); // DeleteCacheAsync, DeleteMessagingAsync
 
 ```
 
-### 1.4. Entidades que reflitam tabelas de banco de dados
+### 1.4. Entidades
 
-```csharp
-// ✅ Correto - Todas propriedades em PascalCase e aceitar null
-public class UserEntity
-{
-    public int? Id { get; set; }
-    public string? FirstName { get; set; }
-    public string? LastName { get; set; }
-    public DateTime? CreatedAt { get; set; }
-}
-
-// ✅ Correto - Propriedades not null ou com qualquer validação, deve ser implementado a validação com **FluentValidation** 
-
-<Gerar aqui o código csharp>
-
-
-// ❌ Incorreto - Propriedades não seguem PascalCase
-public class UserEntity
-{
-    public int id { get; set; }
-    public string first_name { get; set; }
-    public string last_name { get; set; }
-}
-
-```
+Para modelo de entidade/validator, reutilize a rule compartilhada `entity-validator.mdc` (sets privados, construtores validados com FluentValidation, métodos que revalidam). Nao duplique o snippet aqui.
 
 ## 2. **Estrutura de Classes Genéricas**
 

@@ -1,0 +1,71 @@
+---
+Rule: entity-validator.mdc
+Description: Snippet padrao de entidade EF Core com validacao FluentValidation para reaproveitar em outras rules.
+globs: ["**/*.cs"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "entities", "validation", "efcore", "dapper"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Entidades base com FluentValidation
+
+## 1) Objetivo
+Centralizar um snippet unico de entidade EF Core com setters privados, construtores que validam via FluentValidation e metodos publicos que revalidam. Use EF Core como padrao; recorra a Dapper apenas em aplicacoes simples (modelo pequeno, poucos relacionamentos, sem tracking/lazy loading).
+
+## 2) Snippet base (Product + ProductValidator)
+```csharp
+public class Product
+{
+  #region Properties
+  public Guid Id { get; private set; }
+  public string Name { get; private set; }
+  public decimal Price { get; private set; }
+  #endregion
+
+  #region Constructors
+  private Product() { }
+
+  public Product(Guid id, string name, decimal price)
+  {
+    Id = id == Guid.Empty ? Guid.NewGuid() : id;
+    Name = name;
+    Price = price;
+    new ProductValidator().ValidateAndThrow(this);
+  }
+  #endregion
+
+  #region Public Methods
+  public void UpdatePrice(decimal price)
+  {
+    Price = price;
+    new ProductValidator().ValidateAndThrow(this);
+  }
+  #endregion
+}
+#region Validators
+public class ProductValidator : AbstractValidator<Product>
+{
+  public ProductValidator()
+  {
+    RuleFor(x => x.Name).NotEmpty().MaximumLength(200);
+    RuleFor(x => x.Price).GreaterThan(0);
+  }
+}
+#endregion
+```
+
+## 3) Orientacoes de uso
+- Sempre mantenha setters privados e forneca metodos coesos para mutacao (revalidando apos alterar estado).
+- Valide no construtor e em cada metodo publico que altera propriedades.
+- Gere Guid automaticamente quando nenhum Id for fornecido.
+- Em aplicacoes simples (Dapper), mantenha o mesmo modelo de entidade/validator, apenas trocando o acesso a dados.
+- Inclua este snippet como referencia ou copiado em outras rules para garantir consistencia.
+
+## 4) Checklist rapido
+- [ ] Construtor privado + construtor completo com validacao.
+- [ ] Regioes organizando propriedades, construtores e metodos publicos.
+- [ ] FluentValidation chamado no construtor e metodos de alteracao.
+- [ ] Sets privados em todas as propriedades.
+- [ ] Observacao sobre EF Core como padrao e Dapper em cenarios simples.

@@ -1,28 +1,15 @@
 ---
 Rule: console-batch-simple-observability.mdc
 Description: Padroes para console app batch simples com observabilidade e integracao legada.
-globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json"]
-rules: @csharp-style-guide
-alwaysApply: false
-tags: ["csharp", "console", "batch", "observability"]
-Author: Glauber Duma
-Created: 2026-02
----
-
-# Console batch simples com observabilidade
-
----
-Rule: console-batch-simple-observability.mdc
-Description: Padroes para aplicacoes console simples (batch) com observabilidade.
 globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/Dockerfile"]
-rules: @csharp-style-guide
+rules: @csharp-style-guide, @entity-validator, @efcore-repository, @dapper-repository, @fluentvalidation, @use-cases, @unit-testing, @docker-containers, @observability
 alwaysApply: false
 tags: ["csharp", "console", "batch", "observability", "docker"]
 Author: Glauber Duma
 Created: 2026-02
 ---
 
-# Console simples com observabilidade
+# Console batch simples com observabilidade
 
 ## 1) Objetivo
 Padronizar apps console focados em processos batch simples, com logging estruturado e tracing.
@@ -41,6 +28,7 @@ deploy/
   Dockerfile
 tests/
   Unit/
+  Integration/
 ```
 
 ## 3) Pacotes recomendados
@@ -86,11 +74,94 @@ public class ImportJob : BackgroundService
 }
 ```
 
-## 6) Observabilidade
-- Logs estruturados com Serilog.
-- Tracing de chamadas HTTP (quando existirem) e spans manuais para etapas do job.
+### Job com entrada externa, validacao e MediatR
+```csharp
+public record ImportCustomersCommand(string FilePath) : IRequest;
 
-## 7) Dockerfile (opcional)
+public class ImportCustomersHandler : IRequestHandler<ImportCustomersCommand>
+{
+  private readonly ILogger<ImportCustomersHandler> _logger;
+  private readonly ICustomerRepository _repo;
+
+  public ImportCustomersHandler(ILogger<ImportCustomersHandler> logger, ICustomerRepository repo)
+  {
+    _logger = logger;
+    _repo = repo;
+  }
+
+  public async Task Handle(ImportCustomersCommand request, CancellationToken ct)
+  {
+    if (!File.Exists(request.FilePath))
+      throw new FileNotFoundException("Input file not found", request.FilePath);
+
+    using var stream = File.OpenRead(request.FilePath);
+    using var reader = new StreamReader(stream);
+
+    while (!reader.EndOfStream)
+    {
+      var line = await reader.ReadLineAsync();
+      if (string.IsNullOrWhiteSpace(line)) continue;
+
+      var columns = line.Split(';');
+      var customer = new Customer(columns[0], columns[1], columns[2]);
+      await _repo.AddAsync(customer, ct);
+    }
+
+    _logger.LogInformation("Customers imported from {File}", request.FilePath);
+  }
+}
+```
+
+### Opcao tipada para configuracao do batch
+```csharp
+public class BatchOptions
+{
+  public string InputPath { get; init; } = string.Empty;
+  public int DegreeOfParallelism { get; init; } = 4;
+}
+
+builder.Services.AddOptions<BatchOptions>()
+  .BindConfiguration("Batch")
+  .ValidateDataAnnotations()
+  .Validate(o => o.DegreeOfParallelism > 0, "DegreeOfParallelism must be > 0");
+```
+
+### Pipeline de execucao com tracing manual e retry simples
+```csharp
+public class ImportOrchestrator
+{
+  private readonly IMediator _mediator;
+  private readonly ActivitySource _source = new("BatchJobs");
+
+  public ImportOrchestrator(IMediator mediator) => _mediator = mediator;
+
+  public async Task RunAsync(string file, CancellationToken ct)
+  {
+    using var activity = _source.StartActivity("import-customers");
+    var retryPolicy = Policy.Handle<IOException>().WaitAndRetryAsync(3, i => TimeSpan.FromSeconds(i));
+    await retryPolicy.ExecuteAsync(async () => await _mediator.Send(new ImportCustomersCommand(file), ct));
+  }
+}
+```
+
+## 6) Entidades (EF Core) com validação
+Para padronizar entidades EF Core com setters privados, construtores validados e métodos de mutação que revalidam, utilize a rule compartilhada `entity-validator.mdc`. Ela centraliza o snippet e as orientações para consistência entre projetos.
+
+## 7) Repositório genérico (EF Core)
+Para padronizar o repositório genérico EF Core, utilize a rule compartilhada `efcore-repository.mdc`. Ela centraliza o contrato, implementação, DTO de paginação e orientações de uso.
+
+## 8) Repositório genérico (Dapper) para aplicações simples
+Para padronizar o repositório Dapper para cenários simples, utilize a rule compartilhada `dapper-repository.mdc`. Ela centraliza o contrato, implementação e orientações para uso plugável.
+
+## 9) Observabilidade
+Para padrões completos de observabilidade (Serilog com logs estruturados, OpenTelemetry com traces e metrics, Health Checks), consulte `@observability`.
+
+**Especificidades deste projeto**:
+- Logs estruturados com Serilog (sem health checks, aplicação console)
+- Traces para chamadas HTTP (quando existirem)
+- Custom spans manuais para etapas importantes do job
+
+## 10) Dockerfile (opcional)
 ```Dockerfile
 FROM mcr.microsoft.com/dotnet/runtime:9.0 AS base
 WORKDIR /app
@@ -107,11 +178,18 @@ COPY --from=build /app/publish .
 ENTRYPOINT ["dotnet", "App.dll"]
 ```
 
-## 8) Testes
+## 11) Testes
+Para padrões de testes (xUnit, Moq, FluentAssertions, Bogus, Testcontainers, cobertura), consulte `@unit-testing`.
+
+**Especificidades deste projeto**:
 - Unit: services e orquestradores dos jobs.
 - Smoke: execucao do binario validando codigo de saida.
 
-## 9) Checklist
-- Observabilidade ativa (logs + traces quando aplicavel).
-- Job principal coberto por testes unitarios.
-- Dockerfile pronto se necessitar conteinerizacao.
+## 12) Checklist
+- Entidades conforme `entity-validator.mdc`.
+- Repositório genérico conforme `efcore-repository.mdc`.
+- Repositório Dapper conforme `dapper-repository.mdc` (se aplicável).
+- Validadores conforme `fluentvalidation.mdc`.
+- Observabilidade ativa (logs + traces quando aplicável).
+- Testes conforme `@unit-testing`: cobertura unit no job principal.
+- Dockerfile pronto se necessitar conteinerização.

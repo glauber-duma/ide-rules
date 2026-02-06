@@ -1,26 +1,26 @@
 Voce e um engenheiro de software senior especialista em C# e arquitetura.
 
-Tarefa: gerar uma rule (.mdc) para projetos "aplicacao desktop completa com observabilidade" usando Blazor Hybrid.
+Tarefa: gerar a rule (.mdc) "desktop-blazor-complete-observability.mdc" para "aplicacao desktop completa com observabilidade" usando Blazor Hybrid.
 A rule deve seguir o padrao do repositorio e ser compatível com VS Code e Cursor.
 
-Requisitos:
-- Use .NET 9, C# e Blazor Hybrid (MAUI).
-- Observabilidade com OpenTelemetry + Serilog.
-- Incluir caching local, resiliencia, atualizacao automatica (quando aplicavel).
-- Incluir testes unitarios e de integracao (quando aplicavel) usando xUnit, Moq e FluentAssertions.
-- Use Repository + Unit of Work, DI, SOLID, DRY, KISS.
-- Use MediatR.
-- Cite pacotes open source recomendados.
-- Incluir exemplos de codigo enxutos e prontos.
+Requisitos obrigatórios:
+- .NET 9, C#, Blazor Hybrid (MAUI).
+- Observabilidade: Serilog + OpenTelemetry.
+- Caching local (SQLite), resiliencia, atualização automática (quando aplicável).
+- MediatR para Commands/Queries.
+- Offline mode opcional.
+
+Regras compartilhadas (usar @-notação):
+- @csharp-style-guide, @entity-validator, @efcore-repository, @dapper-repository, @fluentvalidation, @use-cases, @unit-testing
 
 Formato esperado da rule:
 ---
 Rule: desktop-blazor-complete-observability.mdc
-Description: Padroes para desktop Blazor Hybrid completo com observabilidade.
+Description: Padroes para desktop Blazor Hybrid completo com observabilidade e recursos avançados.
 globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/*.razor"]
-rules: @csharp-style-guide
+rules: @csharp-style-guide, @entity-validator, @efcore-repository, @dapper-repository, @fluentvalidation, @use-cases, @unit-testing
 alwaysApply: false
-tags: ["csharp", "desktop", "blazor", "observability"]
+tags: ["csharp", "desktop", "blazor", "maui", "observability"]
 Author: Glauber Duma
 Created: 2026-02
 ---
@@ -28,11 +28,12 @@ Created: 2026-02
 Inclua secoes:
 1) Objetivo
 2) Estrutura de pastas
-3) Pacotes recomendados
-4) Configuracao
-5) Observabilidade
-6) UI e state management
-7) Resiliencia e offline mode
-8) Camadas e padroes
-9) Testes
-10) Checklist de boas praticas
+3) Pacotes (MAUI, Blazor, SQLite, Serilog, OpenTelemetry)
+4) Configuracao (MauiProgram.cs com DI)
+5) Entidades/Repos/Validators - referências
+6) UI/State management Blazor (componentes, state container)
+7) Cache local (SQLite, EF Core)
+8) Resiliencia e offline mode (opcional)
+9) Observabilidade (Serilog + file sink)
+10) Testes - referência @unit-testing
+11) Checklist

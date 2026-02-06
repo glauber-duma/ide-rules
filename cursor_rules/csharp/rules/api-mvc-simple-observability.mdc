@@ -1,15 +1,8 @@
 ---
 Rule: api-mvc-simple-observability.mdc
-Description: Padroes para API MVC simples sem autenticacao, com observabilidade.
-globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json"]
-rules: @csharp-style-guide
-alwaysApply: false
-tags: ["csharp", "api", "mvc", "observability"]
----
-Rule: api-mvc-simple-observability.mdc
-Description: Padroes para API MVC simples sem autenticacao, com observabilidade e camadas claras.
+Description: Padroes para API MVC simples sem autenticacao, com observabilidade, entidades e repositorios exemplificados.
 globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/Dockerfile"]
-rules: @csharp-style-guide
+rules: @csharp-style-guide, @entity-validator, @efcore-repository, @dapper-repository, @fluentvalidation, @use-cases, @unit-testing, @docker-containers, @api-controllers, @observability
 alwaysApply: false
 tags: ["csharp", "api", "mvc", "observability", "docker"]
 Author: Glauber Duma
@@ -19,7 +12,7 @@ Created: 2026-02
 # API simples sem autenticacao
 
 ## 1) Objetivo
-Padronizar APIs ASP.NET Core MVC (controllers) simples, sem autenticacao, com observabilidade.
+Padronizar APIs ASP.NET Core MVC (controllers) simples, sem autenticacao, com observabilidade, entidades validadas e repositorios base.
 
 ## 2) Estrutura de pastas
 ```
@@ -50,7 +43,7 @@ tests/
 - OpenTelemetry.Exporter.OpenTelemetryProtocol
 - MediatR
 - FluentValidation
-- Microsoft.EntityFrameworkCore
+- Microsoft.EntityFrameworkCore (para APIs simples usar EF Core; Dapper/Dapper.Contrib em cenarios minimos)
 
 ## 4) Configuracao (Program.cs)
 ```csharp
@@ -63,6 +56,9 @@ builder.Services.AddOpenTelemetry()
     .WithTracing(t => t.AddAspNetCoreInstrumentation().AddHttpClientInstrumentation())
     .WithMetrics(m => m.AddAspNetCoreInstrumentation());
 
+builder.Services.AddDbContext<AppDbContext>(opt => opt.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
+builder.Services.AddScoped(typeof(IRepository<>), typeof(EfRepository<>));
+
 var app = builder.Build();
 app.UseSerilogRequestLogging();
 app.MapHealthChecks("/healthz");
@@ -70,30 +66,39 @@ app.MapControllers();
 app.Run();
 ```
 
-## 5) Exemplo de controller
-```csharp
-[ApiController]
-[Route("api/products")]
-public class ProductsController : ControllerBase
-{
-    private readonly IMediator _mediator;
-    public ProductsController(IMediator mediator) => _mediator = mediator;
+## 5) Entidades (EF Core) com validação
+Para padronizar entidades EF Core com setters privados, construtores validados e métodos de mutação que revalidam, utilize a rule compartilhada `entity-validator.mdc`. Ela centraliza o snippet e as orientações para consistência entre projetos.
 
-    [HttpGet]
-    public Task<IReadOnlyList<ProductDto>> Get() => _mediator.Send(new ListProductsQuery());
-}
-```
+## 6) Repositório genérico (EF Core)
+Para padronizar o repositório genérico EF Core, utilize a rule compartilhada `efcore-repository.mdc`. Ela centraliza o contrato, implementação, DTO de paginação e orientações de uso.
 
-## 6) Observabilidade
-- Logs estruturados com traceId/correlation id.
-- Traces e metrics via OpenTelemetry; exporter OTLP.
-- Health check exposto em `/healthz`.
+## 7) Repositório genérico (Dapper) para aplicações simples
+Para padronizar o repositório Dapper para cenários simples, utilize a rule compartilhada `dapper-repository.mdc`. Ela centraliza o contrato, implementação e orientações para uso plugável.
 
-## 7) Testes
-- Unit: services, handlers e validators.
+## 8) API Controllers
+Para padrões completos de API controllers (BaseApiController, Result Pattern, Problem Details RFC 7807, status codes semânticos, paginação, versionamento), consulte `@api-controllers`.
+
+**Especificidades deste projeto**:
+- Controllers herdam de `BaseApiController` e delegam para MediatR
+- Use `HandleResult()` para converter `Result<T>` em `IActionResult`
+- Endpoints não requerem autenticação (projeto simples)
+
+## 9) Observabilidade
+Para padrões completos de observabilidade (Serilog com logs estruturados, OpenTelemetry com traces e metrics, Health Checks), consulte `@observability`.
+
+**Especificidades deste projeto**:
+- Health check básico em `/healthz` (verifica self + database)
+- CorrelationId via middleware em todas as requisições
+- Logs incluem traceId e correlationId automaticamente
+
+## 10) Testes
+Para padrões de testes (xUnit, Moq, FluentAssertions, Bogus, Testcontainers, cobertura), consulte `@unit-testing`.
+
+**Especificidades deste projeto**:
+- Unit: validators, handlers/services, repositories com InMemoryDb.
 - Integration: controllers com WebApplicationFactory; banco em memoria/SQLite/containers.
 
-## 8) Dockerfile (opcional)
+## 11) Dockerfile (opcional)
 ```Dockerfile
 FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
 WORKDIR /app
@@ -110,12 +115,11 @@ COPY --from=build /app/publish .
 ENTRYPOINT ["dotnet", "Api.dll"]
 ```
 
-## 9) Checklist
-- Observabilidade ativa (logs + traces + metrics + healthcheck).
-- Camadas separadas e controllers finos.
-- Testes unitarios(xunit/moq/fluentassertions) e de integracao cobrindo endpoints principais.
 
-## 9) Checklist
-- Sem autenticacao/autorizacao.
-- Observabilidade ativa.
-- Testes com xUnit.
+## 12) Checklist
+- Entidades conforme `entity-validator.mdc`.
+- Repositório genérico conforme `efcore-repository.mdc`.
+- Repositório Dapper conforme `dapper-repository.mdc` (se aplicável).
+- Validadores conforme `fluentvalidation.mdc`.
+- Observabilidade ativa (logs + traces + metrics + healthcheck).
+- Testes conforme `@unit-testing`: cobertura unit e integration nos endpoints e repositórios.

@@ -2,7 +2,7 @@
 Rule: microservices-dapr-complete-observability.mdc
 Description: Padroes completos para microservicos com Dapr, resiliencia, observabilidade e entrega via containers.
 globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/dapr/**/*.yaml", "**/docker-compose*.yml", "**/Dockerfile"]
-rules: @csharp-style-guide
+rules: @csharp-style-guide, @entity-validator, @efcore-repository, @dapper-repository, @fluentvalidation, @use-cases, @unit-testing, @docker-containers, @api-controllers, @observability
 alwaysApply: false
 tags: ["csharp", "microservices", "dapr", "observability", "resilience", "docker", "kafka", "redis"]
 Author: Glauber Duma
@@ -211,7 +211,15 @@ spec:
     value: "true"
 ```
 
-## 8) Publicacao/assinatura e invocacao
+## 8) API Controllers
+Para padrões completos de API controllers REST (BaseApiController, Result Pattern, Problem Details RFC 7807, status codes semânticos, paginação, versionamento), consulte `@api-controllers`.
+
+**Especificidades deste projeto**:
+- Controllers herdam de `BaseApiController` para endpoints REST padrão
+- Para integração Dapr (pub/sub, invocação de serviço, state management), veja exemplo abaixo
+- Logs incluem CorrelationId via `CorrelationIdFilter`
+
+## 9) Publicação/assinatura e invocação Dapr
 ```csharp
 [ApiController]
 [Route("orders")]
@@ -239,24 +247,44 @@ public class OrderCreatedHandler : IEventHandler<OrderCreated>
 }
 ```
 
-## 9) Resiliencia e confiabilidade
+## 10) Entidades (EF Core) com validação
+Para padronizar entidades EF Core com setters privados, construtores validados e métodos de mutação que revalidam, utilize a rule compartilhada `entity-validator.mdc`. Ela centraliza o snippet e as orientações para consistência entre projetos.
+
+## 11) Repositório genérico (EF Core)
+Para padronizar o repositório genérico EF Core, utilize a rule compartilhada `efcore-repository.mdc`. Ela centraliza o contrato, implementação, DTO de paginação e orientações de uso.
+
+## 12) Repositório genérico (Dapper) para aplicações simples
+Para padronizar o repositório Dapper para cenários simples, utilize a rule compartilhada `dapper-repository.mdc`. Ela centraliza o contrato, implementação e orientações para uso plugável.
+
+## 13) Resiliencia e confiabilidade
 - Polly para retries, timeout e circuit breaker em HTTP gRPC/actors.
 - Idempotencia em handlers (chaves de deduplicacao em state store).
 - Padrão Outbox para eventos de dominio persistidos antes do publish.
 
-## 10) Observabilidade
-- Tracing distribuido com OTel + OTLP para collector. Inclua traceId em logs Serilog.
-- Metrics: requisições HTTP, latencia, erros, retries.
-- Logs estruturados com correlation id (traceparent) em cada handler/command.
+## 14) Observabilidade
+Para padrões completos de observabilidade (Serilog com logs estruturados, OpenTelemetry com traces e metrics, Health Checks), consulte `@observability`.
 
-## 11) Testes
+**Especificidades deste projeto**:
+- Tracing distribuído com OTel + OTLP para collector central
+- Traces incluem Dapr client (pub/sub, actors, state, service invocation)
+- Metrics customizadas: requisições HTTP, latência, erros, retries, mensagens publicadas/consumidas
+- Logs com correlationId (traceparent) em cada handler/command
+
+## 15) Testes
+Para padrões de testes (xUnit, Moq, FluentAssertions, Bogus, Testcontainers, cobertura), consulte `@unit-testing`.
+
+**Especificidades deste projeto**:
 - Unit: handlers MediatR, validators, repositories (com fakes ou InMemoryDb).
 - Integration: usar Testcontainers para Redis + Kafka + Dapr sidecar (dapr-dev container).
 - Contratos: gerar schemas de eventos e validar com consumidores.
 
-## 12) Checklist
+## 16) Checklist
+- Entidades conforme `entity-validator.mdc`.
+- Repositório genérico conforme `efcore-repository.mdc`.
+- Repositório Dapper conforme `dapper-repository.mdc` (se aplicável).
+- Validadores conforme `fluentvalidation.mdc`.
 - Dockerfile e docker-compose presentes e funcionais com Dapr sidecar.
 - Componentes Dapr (Kafka pub/sub, Redis state) configurados.
 - Observabilidade ligada (logs + traces + metrics) e health checks publicados.
-- Resiliencia com Polly e idempotencia ativa.
-- Testes unitarios e de integracao cobrindo fluxo principal e pub/sub.
+- Resiliência com Polly e idempotência ativa.
+- Testes conforme `@unit-testing`: cobertura unit e integration no fluxo principal e pub/sub.

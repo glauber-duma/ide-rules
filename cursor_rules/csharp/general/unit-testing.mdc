@@ -1,0 +1,1347 @@
+---
+Rule: unit-testing.mdc
+Description: Padrões para testes unitários com xUnit, Moq, Bogus e FluentAssertions
+globs: ["**/*Tests.cs", "**/*Test.cs", "**/Tests/**/*.cs"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "testing", "xunit", "moq", "bogus", "unit-tests"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Unit Testing - Testes Unitários com xUnit, Moq e Bogus
+
+Este documento estabelece padrões para escrita de testes unitários usando xUnit, Moq, Bogus e FluentAssertions, seguindo as melhores práticas do .NET 9.
+
+---
+
+## 1. 🎯 Estrutura e Nomenclatura
+
+### 1.1. Nomenclatura de Classes e Métodos
+
+```csharp
+// ✅ CORRETO - Nomenclatura de classes de teste
+public class UserServiceTests { }
+public class OrderRepositoryTests { }
+public class EmailValidatorTests { }
+
+// ✅ CORRETO - Nomenclatura de métodos (padrão: MethodName_Scenario_ExpectedBehavior)
+[Fact]
+public void GetUserAsync_ValidId_ReturnsUser() { }
+
+[Fact]
+public void GetUserAsync_InvalidId_ThrowsNotFoundException() { }
+
+[Fact]
+public void CreateUser_DuplicateEmail_ReturnsFailureResult() { }
+
+[Fact]
+public void CalculateDiscount_PremiumCustomer_Returns20PercentDiscount() { }
+
+// ✅ ALTERNATIVO - Nomenclatura descritiva em português/inglês claro
+[Fact]
+public void Should_Return_User_When_Id_Is_Valid() { }
+
+[Fact]
+public void Should_Throw_NotFoundException_When_User_Does_Not_Exist() { }
+
+// ❌ INCORRETO - Nomenclaturas inadequadas
+[Fact]
+public void Test1() { }  // Não descritivo
+
+[Fact]
+public void GetUser() { }  // Sem cenário/expectativa
+
+[Fact]
+public void testGetUser() { }  // camelCase
+```
+
+### 1.2. Organização de Arquivos
+
+```
+Tests/
+  Unit/
+    Services/
+      UserServiceTests.cs
+      OrderServiceTests.cs
+    Repositories/
+      UserRepositoryTests.cs
+    Validators/
+      UserRequestValidatorTests.cs
+    Helpers/
+      DateTimeHelperTests.cs
+  Integration/
+    Api/
+      UsersControllerIntegrationTests.cs
+    Database/
+      UserRepositoryIntegrationTests.cs
+  Fixtures/
+    DatabaseFixture.cs
+    UserFixture.cs
+  Builders/
+    UserBuilder.cs
+    OrderBuilder.cs
+```
+
+---
+
+## 2. 🧪 Padrão AAA (Arrange, Act, Assert)
+
+```csharp
+// ✅ CORRETO - Estrutura AAA clara com comentários/separação
+[Fact]
+public async Task GetUserAsync_ValidId_ReturnsUser()
+{
+    // Arrange
+    var userId = 1;
+    var expectedUser = new User { Id = userId, Name = "John Doe" };
+    
+    var repositoryMock = new Mock<IUserRepository>();
+    repositoryMock
+        .Setup(r => r.GetByIdAsync(userId, It.IsAny<CancellationToken>()))
+        .ReturnsAsync(expectedUser);
+    
+    var service = new UserService(repositoryMock.Object);
+
+    // Act
+    var result = await service.GetUserAsync(userId);
+
+    // Assert
+    result.Should().NotBeNull();
+    result.Id.Should().Be(userId);
+    result.Name.Should().Be("John Doe");
+}
+
+// ✅ CORRETO - AAA sem comentários quando óbvio
+[Fact]
+public void Add_TwoNumbers_ReturnsSum()
+{
+    var calculator = new Calculator();
+    
+    var result = calculator.Add(2, 3);
+    
+    result.Should().Be(5);
+}
+
+// ❌ INCORRETO - Estrutura confusa sem separação clara
+[Fact]
+public async Task GetUserAsyncTest()
+{
+    var repositoryMock = new Mock<IUserRepository>();
+    var service = new UserService(repositoryMock.Object);
+    repositoryMock.Setup(r => r.GetByIdAsync(1, It.IsAny<CancellationToken>()))
+        .ReturnsAsync(new User { Id = 1, Name = "John" });
+    var result = await service.GetUserAsync(1);
+    result.Should().NotBeNull();
+}
+```
+
+---
+
+## 3. 📦 xUnit Fundamentals
+
+### 3.1. Facts vs Theories
+
+```csharp
+// ✅ CORRETO - Use [Fact] para testes simples sem parâmetros
+[Fact]
+public void Constructor_WithValidParameters_CreatesInstance()
+{
+    var user = new User(1, "John", "Doe");
+    
+    user.Should().NotBeNull();
+    user.Id.Should().Be(1);
+}
+
+// ✅ CORRETO - Use [Theory] para testes parametrizados
+[Theory]
+[InlineData(1, 2, 3)]
+[InlineData(10, 20, 30)]
+[InlineData(-5, 5, 0)]
+[InlineData(0, 0, 0)]
+public void Add_MultipleScenarios_ReturnsCorrectSum(int a, int b, int expected)
+{
+    var calculator = new Calculator();
+    
+    var result = calculator.Add(a, b);
+    
+    result.Should().Be(expected);
+}
+```
+
+### 3.2. InlineData para Cenários Múltiplos
+
+```csharp
+// ✅ CORRETO - InlineData para validações
+[Theory]
+[InlineData("")]
+[InlineData(null)]
+[InlineData("   ")]
+public void Validate_EmptyOrNullEmail_ReturnsFalse(string email)
+{
+    var validator = new EmailValidator();
+    
+    var result = validator.IsValid(email);
+    
+    result.Should().BeFalse();
+}
+
+// ✅ CORRETO - InlineData com múltiplos parâmetros
+[Theory]
+[InlineData("john@example.com", true)]
+[InlineData("invalid-email", false)]
+[InlineData("@example.com", false)]
+[InlineData("john@", false)]
+[InlineData("john.doe@company.co.uk", true)]
+public void IsValidEmail_VariousFormats_ReturnsExpectedResult(string email, bool expected)
+{
+    var validator = new EmailValidator();
+    
+    var result = validator.IsValid(email);
+    
+    result.Should().Be(expected);
+}
+```
+
+### 3.3. MemberData e ClassData
+
+```csharp
+// ✅ CORRETO - MemberData para cenários complexos
+public class UserServiceTests
+{
+    public static IEnumerable<object[]> GetUserTestData()
+    {
+        yield return new object[] 
+        { 
+            new User { Id = 1, Name = "John", Email = "john@example.com" },
+            true 
+        };
+        yield return new object[] 
+        { 
+            new User { Id = 2, Name = "Jane", Email = "invalid-email" },
+            false 
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(GetUserTestData))]
+    public void ValidateUser_VariousUsers_ReturnsExpectedResult(User user, bool expected)
+    {
+        var validator = new UserValidator();
+        
+        var result = validator.IsValid(user);
+        
+        result.Should().Be(expected);
+    }
+}
+
+// ✅ CORRETO - ClassData para reutilização entre testes
+public class CalculatorTestData : IEnumerable<object[]>
+{
+    public IEnumerator<object[]> GetEnumerator()
+    {
+        yield return new object[] { 1, 2, 3 };
+        yield return new object[] { 10, 20, 30 };
+        yield return new object[] { -5, 5, 0 };
+    }
+
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+}
+
+public class CalculatorTests
+{
+    [Theory]
+    [ClassData(typeof(CalculatorTestData))]
+    public void Add_MultipleScenarios_ReturnsSum(int a, int b, int expected)
+    {
+        var calculator = new Calculator();
+        
+        var result = calculator.Add(a, b);
+        
+        result.Should().Be(expected);
+    }
+}
+```
+
+---
+
+## 4. 🎭 Moq - Mocking e Verificação
+
+### 4.1. Setup Básico
+
+```csharp
+// ✅ CORRETO - Setup simples com retorno
+[Fact]
+public async Task GetUserAsync_ValidId_ReturnsUser()
+{
+    // Arrange
+    var userId = 1;
+    var expectedUser = new User { Id = userId, Name = "John" };
+    
+    var repositoryMock = new Mock<IUserRepository>();
+    repositoryMock
+        .Setup(r => r.GetByIdAsync(userId, It.IsAny<CancellationToken>()))
+        .ReturnsAsync(expectedUser);
+
+    var service = new UserService(repositoryMock.Object);
+
+    // Act
+    var result = await service.GetUserAsync(userId);
+
+    // Assert
+    result.Should().Be(expectedUser);
+}
+
+// ✅ CORRETO - Setup com Exception
+[Fact]
+public async Task GetUserAsync_RepositoryThrows_PropagatesException()
+{
+    // Arrange
+    var repositoryMock = new Mock<IUserRepository>();
+    repositoryMock
+        .Setup(r => r.GetByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+        .ThrowsAsync(new DatabaseException("Connection failed"));
+
+    var service = new UserService(repositoryMock.Object);
+
+    // Act & Assert
+    await service.Invoking(s => s.GetUserAsync(1))
+        .Should().ThrowAsync<DatabaseException>()
+        .WithMessage("Connection failed");
+}
+```
+
+### 4.2. It.Is e It.IsAny
+
+```csharp
+// ✅ CORRETO - It.Is para match específico
+[Fact]
+public async Task CreateUserAsync_ValidUser_CallsRepositoryWithCorrectUser()
+{
+    // Arrange
+    var repositoryMock = new Mock<IUserRepository>();
+    var service = new UserService(repositoryMock.Object);
+    var userRequest = new UserRequest { Name = "John", Email = "john@example.com" };
+
+    // Act
+    await service.CreateUserAsync(userRequest);
+
+    // Assert
+    repositoryMock.Verify(
+        r => r.AddAsync(
+            It.Is<User>(u => u.Name == "John" && u.Email == "john@example.com"),
+            It.IsAny<CancellationToken>()),
+        Times.Once);
+}
+
+// ✅ CORRETO - It.IsAny para parâmetros irrelevantes
+[Fact]
+public async Task DeleteUserAsync_ValidId_CallsRepository()
+{
+    // Arrange
+    var repositoryMock = new Mock<IUserRepository>();
+    repositoryMock
+        .Setup(r => r.GetByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+        .ReturnsAsync(new User { Id = 1 });
+
+    var service = new UserService(repositoryMock.Object);
+
+    // Act
+    await service.DeleteUserAsync(1);
+
+    // Assert
+    repositoryMock.Verify(
+        r => r.DeleteAsync(It.IsAny<User>(), It.IsAny<CancellationToken>()),
+        Times.Once);
+}
+```
+
+### 4.3. Verify - Verificação de Chamadas
+
+```csharp
+// ✅ CORRETO - Verify com Times
+[Fact]
+public async Task ProcessOrderAsync_ValidOrder_SendsEmailOnce()
+{
+    // Arrange
+    var emailServiceMock = new Mock<IEmailService>();
+    var service = new OrderService(emailServiceMock.Object);
+    var order = new Order { Id = 1, CustomerEmail = "customer@example.com" };
+
+    // Act
+    await service.ProcessOrderAsync(order);
+
+    // Assert
+    emailServiceMock.Verify(
+        e => e.SendEmailAsync(
+            "customer@example.com",
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()),
+        Times.Once);
+}
+
+// ✅ CORRETO - Verify que método NÃO foi chamado
+[Fact]
+public async Task ProcessOrderAsync_InvalidOrder_DoesNotSendEmail()
+{
+    // Arrange
+    var emailServiceMock = new Mock<IEmailService>();
+    var service = new OrderService(emailServiceMock.Object);
+    var invalidOrder = new Order { Id = 0 };
+
+    // Act
+    await service.ProcessOrderAsync(invalidOrder);
+
+    // Assert
+    emailServiceMock.Verify(
+        e => e.SendEmailAsync(
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()),
+        Times.Never);
+}
+
+// ✅ CORRETO - VerifyAll para garantir todos os setups foram usados
+[Fact]
+public async Task ComplexScenario_AllMocksUsed()
+{
+    // Arrange
+    var repositoryMock = new Mock<IUserRepository>(MockBehavior.Strict);
+    repositoryMock
+        .Setup(r => r.GetByIdAsync(1, It.IsAny<CancellationToken>()))
+        .ReturnsAsync(new User { Id = 1 });
+
+    var service = new UserService(repositoryMock.Object);
+
+    // Act
+    await service.GetUserAsync(1);
+
+    // Assert
+    repositoryMock.VerifyAll();
+}
+```
+
+### 4.4. Callback para Capturar Argumentos
+
+```csharp
+// ✅ CORRETO - Callback para verificar argumento capturado
+[Fact]
+public async Task CreateUserAsync_ValidUser_SetsCreatedAtTimestamp()
+{
+    // Arrange
+    User? capturedUser = null;
+    
+    var repositoryMock = new Mock<IUserRepository>();
+    repositoryMock
+        .Setup(r => r.AddAsync(It.IsAny<User>(), It.IsAny<CancellationToken>()))
+        .Callback<User, CancellationToken>((user, ct) => capturedUser = user)
+        .Returns(Task.CompletedTask);
+
+    var service = new UserService(repositoryMock.Object);
+    var userRequest = new UserRequest { Name = "John" };
+
+    // Act
+    await service.CreateUserAsync(userRequest);
+
+    // Assert
+    capturedUser.Should().NotBeNull();
+    capturedUser!.CreatedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(1));
+}
+
+// ✅ CORRETO - Callback para simular side effects
+[Fact]
+public async Task ProcessPaymentAsync_Success_UpdatesOrderStatus()
+{
+    // Arrange
+    var order = new Order { Id = 1, Status = OrderStatus.Pending };
+    
+    var paymentServiceMock = new Mock<IPaymentService>();
+    paymentServiceMock
+        .Setup(p => p.ProcessAsync(It.IsAny<PaymentRequest>()))
+        .Callback(() => order.Status = OrderStatus.Paid)
+        .ReturnsAsync(new PaymentResult { Success = true });
+
+    var service = new OrderService(paymentServiceMock.Object);
+
+    // Act
+    await service.ProcessPaymentAsync(order);
+
+    // Assert
+    order.Status.Should().Be(OrderStatus.Paid);
+}
+```
+
+### 4.5. MockBehavior
+
+```csharp
+// ✅ CORRETO - MockBehavior.Strict para garantir todos os métodos têm setup
+[Fact]
+public void StrictMock_UnmockedMethod_ThrowsException()
+{
+    // Arrange
+    var repositoryMock = new Mock<IUserRepository>(MockBehavior.Strict);
+    repositoryMock
+        .Setup(r => r.GetByIdAsync(1, It.IsAny<CancellationToken>()))
+        .ReturnsAsync(new User { Id = 1 });
+
+    // Act & Assert
+    // Chamar método não mockado lança exceção
+    var service = new UserService(repositoryMock.Object);
+    
+    // Isso vai funcionar
+    Assert.NotNull(service.GetUserAsync(1));
+    
+    // Isso lançaria exceção se não tivesse setup
+    // await service.GetAllUsersAsync();  // ❌ MockException!
+}
+
+// ✅ CORRETO - MockBehavior.Loose (padrão) permite métodos sem setup
+[Fact]
+public async Task LooseMock_UnmockedMethod_ReturnsDefault()
+{
+    // Arrange
+    var repositoryMock = new Mock<IUserRepository>(MockBehavior.Loose);
+    // Não precisa setup para todos os métodos
+
+    var service = new UserService(repositoryMock.Object);
+
+    // Act
+    var result = await service.GetUserAsync(999);  // Retorna null (default)
+
+    // Assert
+    result.Should().BeNull();
+}
+```
+
+---
+
+## 5. 🎲 Bogus - Geração de Dados Fake
+
+### 5.1. Faker Básico
+
+```csharp
+// ✅ CORRETO - Faker para gerar dados simples
+[Fact]
+public void CreateUser_RandomData_Success()
+{
+    // Arrange
+    var faker = new Faker();
+    var name = faker.Name.FullName();
+    var email = faker.Internet.Email();
+    var birthDate = faker.Date.Past(30);
+
+    var user = new User
+    {
+        Name = name,
+        Email = email,
+        BirthDate = birthDate
+    };
+
+    // Act & Assert
+    user.Name.Should().NotBeEmpty();
+    user.Email.Should().Contain("@");
+}
+
+// ✅ CORRETO - Faker tipado com regras
+[Fact]
+public void GenerateUsers_WithBogus_CreatesValidUsers()
+{
+    // Arrange
+    var userFaker = new Faker<User>()
+        .RuleFor(u => u.Id, f => f.Random.Int(1, 1000))
+        .RuleFor(u => u.FirstName, f => f.Name.FirstName())
+        .RuleFor(u => u.LastName, f => f.Name.LastName())
+        .RuleFor(u => u.Email, (f, u) => f.Internet.Email(u.FirstName, u.LastName))
+        .RuleFor(u => u.BirthDate, f => f.Date.Past(50, DateTime.Now.AddYears(-18)))
+        .RuleFor(u => u.CreatedAt, f => f.Date.Recent());
+
+    // Act
+    var users = userFaker.Generate(10);
+
+    // Assert
+    users.Should().HaveCount(10);
+    users.Should().OnlyContain(u => !string.IsNullOrEmpty(u.Email));
+    users.Should().OnlyContain(u => u.Email.Contains("@"));
+}
+```
+
+### 5.2. Builders com Bogus
+
+```csharp
+// ✅ CORRETO - Builder combinado com Faker
+public class UserBuilder
+{
+    private static readonly Faker<User> _faker = new Faker<User>()
+        .RuleFor(u => u.Id, f => f.Random.Int(1, 1000))
+        .RuleFor(u => u.FirstName, f => f.Name.FirstName())
+        .RuleFor(u => u.LastName, f => f.Name.LastName())
+        .RuleFor(u => u.Email, (f, u) => f.Internet.Email(u.FirstName, u.LastName))
+        .RuleFor(u => u.BirthDate, f => f.Date.Past(50, DateTime.Now.AddYears(-18)))
+        .RuleFor(u => u.IsActive, f => f.Random.Bool())
+        .RuleFor(u => u.CreatedAt, f => f.Date.Recent());
+
+    private User _user;
+
+    public UserBuilder()
+    {
+        _user = _faker.Generate();
+    }
+
+    public UserBuilder WithId(int id)
+    {
+        _user.Id = id;
+        return this;
+    }
+
+    public UserBuilder WithEmail(string email)
+    {
+        _user.Email = email;
+        return this;
+    }
+
+    public UserBuilder WithInactiveStatus()
+    {
+        _user.IsActive = false;
+        return this;
+    }
+
+    public User Build() => _user;
+}
+
+// Uso nos testes
+[Fact]
+public void ProcessUser_InactiveUser_ThrowsException()
+{
+    // Arrange
+    var user = new UserBuilder()
+        .WithInactiveStatus()
+        .Build();
+
+    var service = new UserService();
+
+    // Act & Assert
+    service.Invoking(s => s.ProcessUser(user))
+        .Should().Throw<InvalidOperationException>();
+}
+```
+
+### 5.3. Datasets com Bogus
+
+```csharp
+// ✅ CORRETO - Gerar lista de dados para testes
+public class OrderTestFixture
+{
+    public List<Order> GenerateOrders(int count)
+    {
+        var orderFaker = new Faker<Order>()
+            .RuleFor(o => o.Id, f => f.Random.Guid())
+            .RuleFor(o => o.OrderNumber, f => f.Random.AlphaNumeric(10).ToUpper())
+            .RuleFor(o => o.CustomerId, f => f.Random.Int(1, 1000))
+            .RuleFor(o => o.TotalAmount, f => f.Finance.Amount(10, 1000))
+            .RuleFor(o => o.Status, f => f.PickRandom<OrderStatus>())
+            .RuleFor(o => o.CreatedAt, f => f.Date.Recent(30))
+            .RuleFor(o => o.Items, f => GenerateOrderItems(f.Random.Int(1, 5)));
+
+        return orderFaker.Generate(count);
+    }
+
+    private List<OrderItem> GenerateOrderItems(int count)
+    {
+        var itemFaker = new Faker<OrderItem>()
+            .RuleFor(i => i.ProductId, f => f.Random.Guid())
+            .RuleFor(i => i.ProductName, f => f.Commerce.ProductName())
+            .RuleFor(i => i.Quantity, f => f.Random.Int(1, 10))
+            .RuleFor(i => i.UnitPrice, f => f.Finance.Amount(5, 500))
+            .RuleFor(i => i.Discount, f => f.Random.Decimal(0, 0.3m));
+
+        return itemFaker.Generate(count);
+    }
+}
+
+[Fact]
+public void CalculateTotalDiscount_MultipleOrders_ReturnsCorrectSum()
+{
+    // Arrange
+    var fixture = new OrderTestFixture();
+    var orders = fixture.GenerateOrders(20);
+    var service = new OrderService();
+
+    // Act
+    var totalDiscount = service.CalculateTotalDiscount(orders);
+
+    // Assert
+    totalDiscount.Should().BeGreaterThanOrEqualTo(0);
+}
+```
+
+---
+
+## 6. 💎 FluentAssertions
+
+### 6.1. Assertions Básicas
+
+```csharp
+// ✅ CORRETO - FluentAssertions para legibilidade
+[Fact]
+public void User_Properties_ShouldHaveExpectedValues()
+{
+    // Arrange & Act
+    var user = new User
+    {
+        Id = 1,
+        Name = "John Doe",
+        Email = "john@example.com",
+        IsActive = true
+    };
+
+    // Assert
+    user.Id.Should().Be(1);
+    user.Name.Should().Be("John Doe");
+    user.Email.Should().Contain("@");
+    user.Email.Should().EndWith(".com");
+    user.IsActive.Should().BeTrue();
+}
+
+// ✅ CORRETO - Comparação de objetos
+[Fact]
+public void CreateUser_ValidData_ReturnsSameValues()
+{
+    // Arrange
+    var userRequest = new UserRequest
+    {
+        FirstName = "John",
+        LastName = "Doe",
+        Email = "john@example.com"
+    };
+
+    var service = new UserService();
+
+    // Act
+    var result = service.CreateUser(userRequest);
+
+    // Assert
+    result.Should().NotBeNull();
+    result.Should().BeEquivalentTo(new
+    {
+        FirstName = "John",
+        LastName = "Doe",
+        Email = "john@example.com"
+    });
+}
+```
+
+### 6.2. Collections
+
+```csharp
+// ✅ CORRETO - Assertions para coleções
+[Fact]
+public async Task GetAllUsersAsync_ReturnsMultipleUsers()
+{
+    // Arrange
+    var users = new List<User>
+    {
+        new() { Id = 1, Name = "John" },
+        new() { Id = 2, Name = "Jane" },
+        new() { Id = 3, Name = "Bob" }
+    };
+
+    var repositoryMock = new Mock<IUserRepository>();
+    repositoryMock
+        .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+        .ReturnsAsync(users);
+
+    var service = new UserService(repositoryMock.Object);
+
+    // Act
+    var result = await service.GetAllUsersAsync();
+
+    // Assert
+    result.Should().HaveCount(3);
+    result.Should().Contain(u => u.Name == "John");
+    result.Should().OnlyContain(u => u.Id > 0);
+    result.Should().BeInAscendingOrder(u => u.Id);
+}
+
+// ✅ CORRETO - BeEquivalentTo para comparação complexa
+[Fact]
+public void GetUsers_ReturnsExpectedCollection()
+{
+    // Arrange
+    var expectedUsers = new[]
+    {
+        new User { Id = 1, Name = "John", Email = "john@example.com" },
+        new User { Id = 2, Name = "Jane", Email = "jane@example.com" }
+    };
+
+    var service = new UserService();
+
+    // Act
+    var result = service.GetUsers();
+
+    // Assert
+    result.Should().BeEquivalentTo(expectedUsers, options => options
+        .Excluding(u => u.CreatedAt)
+        .WithStrictOrdering());
+}
+```
+
+### 6.3. Exceções
+
+```csharp
+// ✅ CORRETO - Testar exceções com FluentAssertions
+[Fact]
+public async Task GetUserAsync_InvalidId_ThrowsNotFoundException()
+{
+    // Arrange
+    var repositoryMock = new Mock<IUserRepository>();
+    repositoryMock
+        .Setup(r => r.GetByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+        .ReturnsAsync((User?)null);
+
+    var service = new UserService(repositoryMock.Object);
+
+    // Act & Assert
+    await service.Invoking(s => s.GetUserAsync(999))
+        .Should().ThrowAsync<NotFoundException>()
+        .WithMessage("*not found*");
+}
+
+// ✅ CORRETO - Testar exceção com propriedades específicas
+[Fact]
+public void ValidateUser_InvalidEmail_ThrowsValidationException()
+{
+    // Arrange
+    var user = new User { Email = "invalid-email" };
+    var validator = new UserValidator();
+
+    // Act & Assert
+    validator.Invoking(v => v.Validate(user))
+        .Should().Throw<ValidationException>()
+        .Which.Errors.Should().Contain(e => e.PropertyName == "Email");
+}
+```
+
+### 6.4. Datas e Tempos
+
+```csharp
+// ✅ CORRETO - Assertion para timestamps
+[Fact]
+public void CreateUser_SetsCreatedAtToNow()
+{
+    // Arrange & Act
+    var user = new User("John", "Doe", "john@example.com");
+
+    // Assert
+    user.CreatedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(1));
+}
+
+// ✅ CORRETO - Comparação de datas
+[Fact]
+public void ExpiryDate_ShouldBeInFuture()
+{
+    // Arrange
+    var subscription = new Subscription
+    {
+        ExpiryDate = DateTime.UtcNow.AddDays(30)
+    };
+
+    // Assert
+    subscription.ExpiryDate.Should().BeAfter(DateTime.UtcNow);
+    subscription.ExpiryDate.Should().BeOnOrBefore(DateTime.UtcNow.AddDays(31));
+}
+```
+
+---
+
+## 7. 🔧 Fixtures e Setup
+
+### 7.1. Constructor Fixture
+
+```csharp
+// ✅ CORRETO - Setup no constructor
+public class UserServiceTests
+{
+    private readonly Mock<IUserRepository> _repositoryMock;
+    private readonly Mock<ILogger<UserService>> _loggerMock;
+    private readonly UserService _service;
+
+    public UserServiceTests()
+    {
+        _repositoryMock = new Mock<IUserRepository>();
+        _loggerMock = new Mock<ILogger<UserService>>();
+        _service = new UserService(_repositoryMock.Object, _loggerMock.Object);
+    }
+
+    [Fact]
+    public async Task GetUserAsync_ValidId_ReturnsUser()
+    {
+        // Arrange
+        var user = new User { Id = 1, Name = "John" };
+        _repositoryMock
+            .Setup(r => r.GetByIdAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(user);
+
+        // Act
+        var result = await _service.GetUserAsync(1);
+
+        // Assert
+        result.Should().Be(user);
+    }
+}
+```
+
+### 7.2. IClassFixture
+
+```csharp
+// ✅ CORRETO - Fixture compartilhada entre testes
+public class DatabaseFixture : IDisposable
+{
+    public ApplicationDbContext DbContext { get; }
+
+    public DatabaseFixture()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase(databaseName: $"TestDb_{Guid.NewGuid()}")
+            .Options;
+
+        DbContext = new ApplicationDbContext(options);
+        
+        // Seed data
+        DbContext.Users.AddRange(
+            new User { Id = 1, Name = "John" },
+            new User { Id = 2, Name = "Jane" }
+        );
+        DbContext.SaveChanges();
+    }
+
+    public void Dispose()
+    {
+        DbContext.Database.EnsureDeleted();
+        DbContext.Dispose();
+    }
+}
+
+public class UserRepositoryTests : IClassFixture<DatabaseFixture>
+{
+    private readonly ApplicationDbContext _dbContext;
+
+    public UserRepositoryTests(DatabaseFixture fixture)
+    {
+        _dbContext = fixture.DbContext;
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_ExistingUser_ReturnsUser()
+    {
+        // Arrange
+        var repository = new UserRepository(_dbContext);
+
+        // Act
+        var user = await repository.GetByIdAsync(1);
+
+        // Assert
+        user.Should().NotBeNull();
+        user!.Name.Should().Be("John");
+    }
+}
+```
+
+### 7.3. ICollectionFixture
+
+```csharp
+// ✅ CORRETO - Fixture compartilhada entre classes de teste
+[CollectionDefinition("Database collection")]
+public class DatabaseCollection : ICollectionFixture<DatabaseFixture>
+{
+    // Esta classe não tem código, apenas define a collection
+}
+
+[Collection("Database collection")]
+public class UserRepositoryTests
+{
+    private readonly DatabaseFixture _fixture;
+
+    public UserRepositoryTests(DatabaseFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    [Fact]
+    public void Test1() { /* usa _fixture */ }
+}
+
+[Collection("Database collection")]
+public class OrderRepositoryTests
+{
+    private readonly DatabaseFixture _fixture;
+
+    public OrderRepositoryTests(DatabaseFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    [Fact]
+    public void Test2() { /* usa _fixture */ }
+}
+```
+
+---
+
+## 8. ⚡ Testes Async
+
+```csharp
+// ✅ CORRETO - Testes async
+[Fact]
+public async Task GetUserAsync_ValidId_ReturnsUserAsync()
+{
+    // Arrange
+    var repositoryMock = new Mock<IUserRepository>();
+    repositoryMock
+        .Setup(r => r.GetByIdAsync(1, It.IsAny<CancellationToken>()))
+        .ReturnsAsync(new User { Id = 1 });
+
+    var service = new UserService(repositoryMock.Object);
+
+    // Act
+    var result = await service.GetUserAsync(1);
+
+    // Assert
+    result.Should().NotBeNull();
+}
+
+// ✅ CORRETO - Testar timeout com CancellationToken
+[Fact]
+public async Task LongRunningOperation_CancellationRequested_ThrowsOperationCanceledException()
+{
+    // Arrange
+    var service = new UserService();
+    var cts = new CancellationTokenSource();
+    cts.Cancel();
+
+    // Act & Assert
+    await service.Invoking(s => s.ProcessAllUsersAsync(cts.Token))
+        .Should().ThrowAsync<OperationCanceledException>();
+}
+
+// ✅ CORRETO - Testar operações paralelas
+[Fact]
+public async Task ProcessMultipleUsers_Parallel_AllSucceed()
+{
+    // Arrange
+    var service = new UserService();
+    var users = Enumerable.Range(1, 10)
+        .Select(i => new User { Id = i, Name = $"User{i}" })
+        .ToList();
+
+    // Act
+    var tasks = users.Select(u => service.ProcessUserAsync(u));
+    var results = await Task.WhenAll(tasks);
+
+    // Assert
+    results.Should().HaveCount(10);
+    results.Should().OnlyContain(r => r.Success);
+}
+```
+
+---
+
+## 9. 📋 Boas Práticas
+
+### 9.1. Princípios FIRST
+
+```csharp
+// F - Fast (Rápido)
+// ✅ Use mocks ao invés de dependências reais
+// ✅ Evite I/O (arquivo, rede, banco real)
+
+// I - Independent (Independente)
+// ✅ Cada teste deve poder rodar isoladamente
+[Fact]
+public void Test1_IndependentTest()
+{
+    var calculator = new Calculator();
+    calculator.Add(1, 2).Should().Be(3);
+}
+
+[Fact]
+public void Test2_AlsoIndependent()
+{
+    var calculator = new Calculator();
+    calculator.Multiply(2, 3).Should().Be(6);
+}
+
+// R - Repeatable (Repetível)
+// ✅ Não dependa de data/hora atual diretamente
+// ❌ INCORRETO
+[Fact]
+public void BadTest_DependsOnCurrentDate()
+{
+    var tomorrow = DateTime.Now.AddDays(1);  // ❌ Não repetível
+}
+
+// ✅ CORRETO - Use abstrações
+[Fact]
+public void GoodTest_UsesAbstractedTime()
+{
+    var clockMock = new Mock<ISystemClock>();
+    clockMock.Setup(c => c.UtcNow).Returns(new DateTime(2026, 1, 1));
+    
+    var service = new DateService(clockMock.Object);
+    var tomorrow = service.GetTomorrow();
+    
+    tomorrow.Should().Be(new DateTime(2026, 1, 2));
+}
+
+// S - Self-Validating (Auto-validável)
+// ✅ Assert claro, sem necessidade de inspeção manual
+
+// T - Timely (Oportuno)
+// ✅ Escreva testes junto com o código (TDD)
+```
+
+### 9.2. Testes Focados (Single Responsibility)
+
+```csharp
+// ✅ CORRETO - Um teste, uma responsabilidade
+[Fact]
+public void CalculateTotal_WithItems_ReturnsSum()
+{
+    var order = new Order();
+    order.AddItem(new OrderItem { Price = 10, Quantity = 2 });
+    order.AddItem(new OrderItem { Price = 5, Quantity = 3 });
+    
+    order.Total.Should().Be(35);
+}
+
+[Fact]
+public void CalculateTotal_WithDiscount_AppliesDiscount()
+{
+    var order = new Order { Discount = 0.10m };
+    order.AddItem(new OrderItem { Price = 100, Quantity = 1 });
+    
+    order.Total.Should().Be(90);
+}
+
+// ❌ INCORRETO - Teste fazendo múltiplas verificações não relacionadas
+[Fact]
+public void BadTest_TestingTooMuch()
+{
+    var order = new Order();
+    order.AddItem(new OrderItem { Price = 10 });
+    order.Total.Should().Be(10);  // Testando total
+    
+    order.Status = OrderStatus.Shipped;
+    order.ShippedAt.Should().NotBeNull();  // Testando status (não relacionado)
+    
+    order.Customer.Name.Should().NotBeEmpty();  // Testando customer (não relacionado)
+}
+```
+
+### 9.3. Avoid Test Code Duplication
+
+```csharp
+// ✅ CORRETO - Helper methods para reduzir duplicação
+public class UserServiceTests
+{
+    private UserService CreateService(Mock<IUserRepository>? repositoryMock = null)
+    {
+        repositoryMock ??= new Mock<IUserRepository>();
+        var loggerMock = new Mock<ILogger<UserService>>();
+        return new UserService(repositoryMock.Object, loggerMock.Object);
+    }
+
+    private User CreateTestUser(int id = 1, string name = "John")
+    {
+        return new User { Id = id, Name = name, Email = $"{name.ToLower()}@example.com" };
+    }
+
+    [Fact]
+    public async Task Test1_UsesHelpers()
+    {
+        var user = CreateTestUser();
+        var repositoryMock = new Mock<IUserRepository>();
+        repositoryMock.Setup(r => r.GetByIdAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(user);
+        
+        var service = CreateService(repositoryMock);
+        
+        var result = await service.GetUserAsync(1);
+        result.Should().Be(user);
+    }
+}
+```
+
+### 9.4. Naming Conventions
+
+```csharp
+// ✅ CORRETO - Nomes descritivos
+[Fact]
+public void Withdraw_InsufficientBalance_ThrowsInvalidOperationException() { }
+
+[Fact]
+public void Withdraw_ValidAmount_DecreasesBalance() { }
+
+[Fact]
+public void Withdraw_NegativeAmount_ThrowsArgumentException() { }
+
+// ✅ ALTERNATIVO - Naming em português claro
+[Fact]
+public void Deve_Lancar_Excecao_Quando_Saldo_Insuficiente() { }
+
+[Fact]
+public void Deve_Diminuir_Saldo_Quando_Valor_Valido() { }
+
+// ❌ INCORRETO - Nomes genéricos
+[Fact]
+public void TestWithdraw1() { }
+
+[Fact]
+public void TestWithdraw2() { }
+```
+
+---
+
+## 10. 📊 Code Coverage e Relatórios
+
+### 10.1. Configuração de Coverage
+
+```xml
+<!-- Directory.Build.props ou .csproj -->
+<PropertyGroup>
+    <CollectCoverage>true</CollectCoverage>
+    <CoverletOutputFormat>opencover</CoverletOutputFormat>
+    <CoverletOutput>./coverage/</CoverletOutput>
+    <Exclude>[*.Tests]*,[*.TestHelpers]*</Exclude>
+    <ExcludeByAttribute>GeneratedCodeAttribute,ExcludeFromCodeCoverageAttribute</ExcludeFromCodeCoverageAttribute>
+</PropertyGroup>
+```
+
+### 10.2. Comandos
+
+```bash
+# Executar testes com coverage
+dotnet test /p:CollectCoverage=true /p:CoverletOutputFormat=opencover
+
+# Coverage com relatório HTML (usando ReportGenerator)
+dotnet test /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura
+reportgenerator -reports:coverage.cobertura.xml -targetdir:coveragereport -reporttypes:Html
+
+# Coverage com threshold
+dotnet test /p:CollectCoverage=true /p:Threshold=80 /p:ThresholdType=line
+```
+
+### 10.3. Atributos para Exclusão
+
+```csharp
+// ✅ CORRETO - Excluir código gerado de coverage
+[ExcludeFromCodeCoverage]
+public class GeneratedClass
+{
+    // Código gerado automaticamente
+}
+
+// ✅ CORRETO - Excluir propriedades triviais
+public class User
+{
+    public int Id { get; set; }
+    
+    [ExcludeFromCodeCoverage]
+    public string FullName => $"{FirstName} {LastName}";
+}
+```
+
+---
+
+## 11. ✅ Unit Testing Checklist
+
+### Estrutura e Organização
+- [ ] Classe de teste nomeada como `{ClasseTestada}Tests`
+- [ ] Métodos nomeados como `MethodName_Scenario_ExpectedBehavior`
+- [ ] Testes organizados em pastas lógicas (Unit/, Integration/)
+- [ ] Um arquivo de teste por classe testada
+
+### Padrão AAA
+- [ ] Seção Arrange clara (setup de mocks, dados)
+- [ ] Seção Act com única chamada ao método testado
+- [ ] Seção Assert com verificações explícitas
+- [ ] Comentários AAA quando necessário para clareza
+
+### xUnit
+- [ ] `[Fact]` para testes simples
+- [ ] `[Theory]` com `[InlineData]` para testes parametrizados
+- [ ] `[MemberData]` ou `[ClassData]` para cenários complexos
+- [ ] Fixtures (`IClassFixture`, `ICollectionFixture`) quando apropriado
+
+### Moq
+- [ ] Mocks criados para todas as dependências
+- [ ] `Setup` correto com `Returns` ou `ReturnsAsync`
+- [ ] `Verify` para garantir chamadas esperadas
+- [ ] `It.Is` para verificações específicas, `It.IsAny` para genéricas
+- [ ] `Times.Once`, `Times.Never` para controle de execução
+
+### Bogus
+- [ ] Faker usado para gerar dados de teste variados
+- [ ] Builders combinados com Faker para reutilização
+- [ ] Dados fake realistas e relevantes
+
+### FluentAssertions
+- [ ] Assertions legíveis com `Should()`
+- [ ] `BeEquivalentTo` para comparações de objetos
+- [ ] Assertions específicas para collections, exceções, datas
+- [ ] `ThrowAsync` para testes de exceções async
+
+### Boas Práticas
+- [ ] Testes rápidos (< 100ms cada)
+- [ ] Testes independentes (podem rodar em qualquer ordem)
+- [ ] Testes repetíveis (mesmos resultados sempre)
+- [ ] Um assert por conceito (testes focados)
+- [ ] Sem lógica condicional nos testes
+- [ ] Coverage mínimo de 80%
+
+### Async
+- [ ] Métodos de teste são `async Task`
+- [ ] Usa `await` para chamadas async
+- [ ] `ReturnsAsync` em mocks async
+- [ ] `ThrowAsync` para exceções async
+
+### Naming e Legibilidade
+- [ ] Nomes descritivos e auto-explicativos
+- [ ] Evita números nos nomes (Test1, Test2)
+- [ ] Consistência entre todos os testes
+- [ ] Comentários apenas quando adiciona contexto importante
+
+---
+
+**Última atualização**: Fevereiro 2026  
+**Versão do documento**: 1.0.0  
+**Autor**: Glauber Duma
+
+---
+
+## Pacotes NuGet Recomendados
+
+```xml
+<ItemGroup>
+    <!-- xUnit -->
+    <PackageReference Include="xunit" Version="2.6.6" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.6" />
+    
+    <!-- Moq -->
+    <PackageReference Include="Moq" Version="4.20.70" />
+    
+    <!-- FluentAssertions -->
+    <PackageReference Include="FluentAssertions" Version="6.12.0" />
+    
+    <!-- Bogus -->
+    <PackageReference Include="Bogus" Version="35.3.0" />
+    
+    <!-- Coverage -->
+    <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="coverlet.msbuild" Version="6.0.0" />
+    
+    <!-- Microsoft Testing -->
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.9.0" />
+</ItemGroup>
+```
