@@ -1,0 +1,204 @@
+---
+Rule: web-mvc-auth-observability.mdc
+Description: Padroes para aplicacao web MVC com autenticacao, autorizacao e observabilidade.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "mvc", "web", "auth", "observability"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Web MVC com autenticacao e observabilidade
+
+## 1) Objetivo
+Padronizar projetos ASP.NET Core MVC com autenticacao/autorizacao e observabilidade.
+
+## 2) Estrutura de pastas
+```
+src/
+  Presentation/
+    Controllers/
+    Views/
+    ViewModels/
+    Program.cs
+  Application/
+    Interfaces/
+    Services/
+    DTOs/
+    Validators/
+  Domain/
+    Entities/
+  Infrastructure/
+    Identity/
+    Data/
+      Context/
+      Repositories/
+    Observability/
+  Tests/
+    Unit/
+    Integration/
+```
+
+## 3) Pacotes recomendados
+- Microsoft.AspNetCore.Identity.EntityFrameworkCore
+- Microsoft.AspNetCore.Authentication.Cookies
+- Serilog.AspNetCore
+- OpenTelemetry.Extensions.Hosting
+- MediatR
+- FluentValidation
+- Microsoft.EntityFrameworkCore
+
+## 4) Configuracao (Identity + DI)
+```csharp
+builder.Services.AddAuthentication()
+    .AddCookie();
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("AdminOnly", p => p.RequireRole("Admin"));
+});
+```
+
+## 5) Observabilidade
+- Log de login/logout e falhas.
+- Traces para endpoints criticos.
+
+## 6) Seguranca e autorizacao
+- Use Identity + password hashing.
+- Use policy-based auth em controllers.
+
+---
+Rule: web-mvc-auth-observability.mdc
+Description: Padroes para aplicacao web MVC com autenticacao/autorizacao (cookies) e observabilidade.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/Dockerfile"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "mvc", "web", "auth", "observability", "docker"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Web MVC com autenticacao
+
+## 1) Objetivo
+Padronizar projetos ASP.NET Core MVC com autenticacao/autorizacao via Identity + cookies e observabilidade.
+
+## 2) Estrutura de pastas
+```
+src/
+  Presentation/
+    Controllers/
+    Views/
+    ViewModels/
+    Filters/
+    Program.cs
+  Application/
+    Services/
+    DTOs/Validators/
+  Domain/
+    Entities/ValueObjects/
+  Infrastructure/
+    Identity/
+    Data/Repositories/
+    Observability/
+deploy/
+  Dockerfile
+tests/
+  Unit/
+  Integration/
+```
+
+## 3) Pacotes recomendados
+- Microsoft.AspNetCore.Identity.EntityFrameworkCore
+- Serilog.AspNetCore, Serilog.Sinks.Console
+- OpenTelemetry.Extensions.Hosting
+- OpenTelemetry.Instrumentation.AspNetCore, OpenTelemetry.Instrumentation.Http
+- OpenTelemetry.Exporter.OpenTelemetryProtocol
+- MediatR
+- FluentValidation
+- Microsoft.EntityFrameworkCore
+
+## 4) Configuracao (Program.cs)
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Host.UseSerilog((ctx, cfg) => cfg.ReadFrom.Configuration(ctx.Configuration));
+
+builder.Services.AddDbContext<AppDbContext>(o => o.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
+builder.Services.AddIdentity<AppUser, IdentityRole>()
+    .AddEntityFrameworkStores<AppDbContext>()
+    .AddDefaultTokenProviders();
+
+builder.Services.ConfigureApplicationCookie(opt =>
+{
+    opt.LoginPath = "/Account/Login";
+    opt.AccessDeniedPath = "/Account/Denied";
+});
+
+builder.Services.AddControllersWithViews(opt => opt.Filters.Add<AuthorizeFilter>());
+builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssemblyContaining<Program>());
+builder.Services.AddOpenTelemetry()
+    .WithTracing(t => t.AddAspNetCoreInstrumentation().AddHttpClientInstrumentation())
+    .WithMetrics(m => m.AddAspNetCoreInstrumentation());
+
+var app = builder.Build();
+app.UseSerilogRequestLogging();
+app.UseStaticFiles();
+app.UseRouting();
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapHealthChecks("/healthz");
+app.MapDefaultControllerRoute();
+app.Run();
+```
+
+## 5) Exemplo basico de AccountController
+```csharp
+[AllowAnonymous]
+public class AccountController : Controller
+{
+    private readonly SignInManager<AppUser> _signIn;
+    public AccountController(SignInManager<AppUser> signIn) => _signIn = signIn;
+
+    [HttpPost]
+    public async Task<IActionResult> Login(LoginViewModel vm)
+    {
+        var result = await _signIn.PasswordSignInAsync(vm.Email, vm.Password, vm.RememberMe, lockoutOnFailure: true);
+        if (result.Succeeded) return RedirectToAction("Index", "Home");
+        ModelState.AddModelError("", "Login invalido");
+        return View(vm);
+    }
+}
+```
+
+## 6) Observabilidade
+- Logs estruturados com usuario/tenant (sem dados sensiveis), traceId e correlation id.
+- Traces e metrics via OpenTelemetry; exporter OTLP.
+- Health checks protegidos por autorizacao quando publico.
+
+## 7) Testes
+- Unit: services, validators, regras de autorizacao (policies).
+- Integration: login/logout e rotas protegidas com WebApplicationFactory + Identity store em memoria/SQLite.
+
+## 8) Dockerfile (opcional para deploy)
+```Dockerfile
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
+WORKDIR /app
+
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+COPY . .
+RUN dotnet restore ./src/Presentation/Presentation.csproj
+RUN dotnet publish ./src/Presentation/Presentation.csproj -c Release -o /app/publish
+
+FROM base AS final
+WORKDIR /app
+COPY --from=build /app/publish .
+ENTRYPOINT ["dotnet", "Presentation.dll"]
+```
+
+## 9) Checklist
+- Identity + cookies configurados (login, lockout, policies).
+- Observabilidade ativa (logs + traces + metrics + healthcheck).
+- Testes cobrindo autenticacao e rotas protegidas.

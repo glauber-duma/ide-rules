@@ -1,0 +1,162 @@
+---
+Rule: console-batch-complete-observability.mdc
+Description: Padroes para console app batch completo com observabilidade e integracao legada.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "console", "batch", "observability", "resilience"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Console batch completo com observabilidade
+
+## 1) Objetivo
+Padronizar console apps batch com resiliencia e observabilidade.
+
+## 2) Estrutura de pastas
+```
+src/
+  Program.cs
+  Application/
+  Domain/
+  Infrastructure/
+  Jobs/
+  Scheduling/
+  Tests/
+    Unit/
+    Integration/
+```
+
+## 3) Pacotes recomendados
+- Serilog.AspNetCore
+- OpenTelemetry.Extensions.Hosting
+- Polly
+- MediatR
+---
+Rule: console-batch-complete-observability.mdc
+Description: Padroes para aplicacoes console completas (batch) com observabilidade, resiliencia e conteinerizacao.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/Dockerfile"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "console", "batch", "observability", "resilience", "docker"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Console completo com observabilidade
+
+## 1) Objetivo
+Padronizar apps console completos para integrações batch, com resiliencia (Polly), mensageria opcional e observabilidade.
+
+## 2) Estrutura de pastas
+```
+src/
+  App/
+    Program.cs
+    Jobs/
+    Pipelines/
+  Application/
+    Services/
+    DTOs/Validators/
+  Domain/
+    Entities/
+  Infrastructure/
+    Messaging/
+    Observability/
+    Storage/
+deploy/
+  Dockerfile
+tests/
+  Unit/
+  Integration/
+```
+
+## 3) Pacotes recomendados
+- Serilog.Extensions.Hosting, Serilog.Sinks.Console
+- OpenTelemetry.Extensions.Hosting
+- OpenTelemetry.Instrumentation.Http
+- OpenTelemetry.Exporter.OpenTelemetryProtocol
+- MediatR
+- Polly, Polly.Contrib.WaitAndRetry
+- MassTransit (Kafka ou RabbitMQ) quando houver fila
+
+## 4) Configuracao (Program.cs)
+```csharp
+Host.CreateDefaultBuilder(args)
+    .UseSerilog((ctx, cfg) => cfg.ReadFrom.Configuration(ctx.Configuration))
+    .ConfigureServices((ctx, services) =>
+    {
+        services.AddMediatR(cfg => cfg.RegisterServicesFromAssemblyContaining<Program>());
+        services.AddOpenTelemetry()
+            .WithTracing(t => t.AddHttpClientInstrumentation().AddSource("BatchJobs"))
+            .WithMetrics(m => m.AddRuntimeInstrumentation());
+
+        services.AddHttpClient("legacy", c => c.BaseAddress = new Uri(ctx.Configuration["Legacy:BaseUrl"]!))
+            .AddPolicyHandler(Policy.TimeoutAsync<HttpResponseMessage>(TimeSpan.FromSeconds(10)))
+            .AddPolicyHandler(Policy<HttpResponseMessage>.Handle<HttpRequestException>().WaitAndRetryAsync(3, Polly.Contrib.WaitAndRetry.Backoff.DecorrelatedJitterBackoffV2(TimeSpan.FromSeconds(1), 3)));
+
+        services.AddHostedService<ImportPipelineJob>();
+    })
+    .Build()
+    .Run();
+```
+
+## 5) Exemplo de pipeline com steps
+```csharp
+public class ImportPipelineJob : BackgroundService
+{
+    private readonly ILogger<ImportPipelineJob> _logger;
+    private readonly IMediator _mediator;
+    public ImportPipelineJob(ILogger<ImportPipelineJob> logger, IMediator mediator)
+    {
+        _logger = logger; _mediator = mediator;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation("Starting import pipeline");
+        await _mediator.Send(new FetchLegacyDataCommand(), stoppingToken);
+        await _mediator.Send(new NormalizeDataCommand(), stoppingToken);
+        await _mediator.Send(new PersistDataCommand(), stoppingToken);
+        _logger.LogInformation("Import pipeline completed");
+    }
+}
+```
+
+## 6) Observabilidade
+- Logs estruturados com spans por etapa do pipeline.
+- Traces para chamadas HTTP/DB e spans manuais por etapa.
+- Metrics: tempo por etapa, contagem de registros processados, erros.
+
+## 7) Resiliencia
+- Polly: timeout + retry com jitter para chamadas externas.
+- Controle de idempotencia (marcadores de lote) para evitar reprocessamento.
+- Dead-letter ou re-drive para mensagens/arquivos com erro (quando usar fila).
+
+## 8) Dockerfile (opcional)
+```Dockerfile
+FROM mcr.microsoft.com/dotnet/runtime:9.0 AS base
+WORKDIR /app
+
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+COPY . .
+RUN dotnet restore ./src/App/App.csproj
+RUN dotnet publish ./src/App/App.csproj -c Release -o /app/publish
+
+FROM base AS final
+WORKDIR /app
+COPY --from=build /app/publish .
+ENTRYPOINT ["dotnet", "App.dll"]
+```
+
+## 9) Testes
+- Unit: steps/pipelines e validadores.
+- Integration: execucao end-to-end contra APIs legadas mockadas (WireMock) e armazenamento real/containers.
+
+## 10) Checklist
+- Observabilidade ativa (logs + traces + metrics) por etapa.
+- Resiliencia configurada em IO externo.
+- Pipelines cobertos por testes unitarios e de integracao.
+- Dockerfile pronto para empacotar o job.

@@ -1,0 +1,102 @@
+---
+Rule: desktop-blazor-complete-auth-observability.mdc
+Description: Padroes para desktop Blazor Hybrid completo com autenticacao (OIDC/PKCE), observabilidade e offline.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/*.razor"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "desktop", "blazor", "auth", "observability", "offline"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Desktop Blazor Hybrid completo com autenticacao
+
+## 1) Objetivo
+Padronizar apps desktop Blazor Hybrid completos com autenticacao/autorizacao, observabilidade e sincronizacao offline resiliente.
+
+## 2) Estrutura de pastas
+```
+src/
+  App/
+    Pages/
+    Components/
+    Auth/
+    State/
+    Program.cs
+  Application/
+    Services/
+    DTOs/
+  Domain/
+    Entities/
+  Infrastructure/
+    Security/
+    Offline/
+    Observability/
+    Storage/
+tests/
+  Unit/
+  Integration/
+```
+
+## 3) Pacotes recomendados
+- IdentityModel.OidcClient
+- Serilog.Extensions.Logging, Serilog.Sinks.Console
+- OpenTelemetry.Extensions.Hosting
+- OpenTelemetry.Instrumentation.Http
+- MediatR
+- Polly
+
+## 4) Configuracao (Program.cs + OIDC)
+```csharp
+var builder = MauiApp.CreateBuilder();
+builder.UseMauiApp<App>();
+
+builder.Logging.AddSerilog(new LoggerConfiguration().WriteTo.Console().CreateLogger());
+
+builder.Services.AddSingleton(new OidcClient(new OidcClientOptions
+{
+    Authority = builder.Configuration["Auth:Authority"],
+    ClientId = builder.Configuration["Auth:ClientId"],
+    Scope = "openid profile api.read api.write",
+    RedirectUri = "myapp://callback",
+    Browser = new WebAuthenticatorBrowser(),
+    RefreshTokenInnerHttpHandler = new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(2) }
+}));
+
+builder.Services.AddHttpClient("api")
+    .AddPolicyHandler(Policy.TimeoutAsync<HttpResponseMessage>(TimeSpan.FromSeconds(10)))
+    .AddPolicyHandler(Policy<HttpResponseMessage>.Handle<HttpRequestException>().WaitAndRetryAsync(3, _ => TimeSpan.FromSeconds(2)));
+
+builder.Services.AddOpenTelemetry()
+    .WithTracing(t => t.AddHttpClientInstrumentation())
+    .WithMetrics(m => m.AddRuntimeInstrumentation());
+
+builder.Services.AddSingleton<AppState>();
+builder.Services.AddSingleton<SyncQueue>();
+
+return builder.Build();
+```
+
+## 5) Observabilidade
+- Logs estruturados para login/logout, refresh e sync (sem armazenar tokens).
+- Traces de chamadas HTTP autenticadas; spans manuais para etapas de sync e reenvio de fila.
+- Metrics: tamanho da fila offline, taxas de sucesso/erro, tempo de refresh.
+
+## 6) Seguranca e autorizacao
+- PKCE e refresh tokens; armazenamento seguro (SecureStorage/Keychain) e limpeza segura no logout.
+- Policies locais para habilitar/desabilitar telas conforme claims/roles.
+- Lockout e limitação de tentativas no provedor de identidade quando aplicavel.
+
+## 7) Offline e sincronizacao
+- Fila local para comandos quando offline, com deduplicacao.
+- Reenvio da fila com retry exponencial e backoff; cancelar ao perder token.
+- Cache local para leituras com expiracao e invalidacao quando eventos de write ocorrerem.
+
+## 8) Testes
+- Unit: auth flow (PKCE), state containers, filas offline.
+- Integration: alternando online/offline, renovacao de token e reenvio da fila; API mockada.
+
+## 9) Checklist
+- Autenticacao OIDC/PKCE configurada com armazenamento seguro.
+- Observabilidade cobrindo auth e sync.
+- Offline/queue e cache local implementados e testados.

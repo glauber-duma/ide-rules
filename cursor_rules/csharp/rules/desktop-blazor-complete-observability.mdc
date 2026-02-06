@@ -1,0 +1,85 @@
+---
+Rule: desktop-blazor-complete-observability.mdc
+Description: Padroes para desktop Blazor Hybrid completo com observabilidade.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/*.razor"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "desktop", "blazor", "observability", "offline"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Desktop Blazor Hybrid completo
+
+## 1) Objetivo
+Padronizar apps desktop Blazor Hybrid completos, com observabilidade, resiliencia em chamadas externas e sincronizacao offline.
+
+## 2) Estrutura de pastas
+```
+src/
+  App/
+    Pages/
+    Components/
+    State/
+    Program.cs
+  Application/
+    Services/
+    DTOs/
+  Domain/
+    Entities/
+  Infrastructure/
+    Offline/
+    Observability/
+    Storage/
+tests/
+  Unit/
+  Integration/
+```
+
+## 3) Pacotes recomendados
+- Serilog.Extensions.Logging, Serilog.Sinks.Console
+- OpenTelemetry.Extensions.Hosting
+- OpenTelemetry.Instrumentation.Http
+- MediatR
+- Polly (timeout/retry/jitter)
+
+## 4) Configuracao (Program.cs)
+```csharp
+var builder = MauiApp.CreateBuilder();
+builder.UseMauiApp<App>();
+
+builder.Logging.AddSerilog(new LoggerConfiguration().WriteTo.Console().CreateLogger());
+builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssemblyContaining<App>());
+
+builder.Services.AddHttpClient("api")
+    .AddPolicyHandler(Policy.TimeoutAsync<HttpResponseMessage>(TimeSpan.FromSeconds(10)))
+    .AddPolicyHandler(Policy<HttpResponseMessage>.Handle<HttpRequestException>().WaitAndRetryAsync(3, _ => TimeSpan.FromSeconds(2)));
+
+builder.Services.AddOpenTelemetry()
+    .WithTracing(t => t.AddHttpClientInstrumentation())
+    .WithMetrics(m => m.AddRuntimeInstrumentation());
+
+builder.Services.AddSingleton<AppState>();
+builder.Services.AddSingleton<SyncQueue>();
+
+return builder.Build();
+```
+
+## 5) Observabilidade
+- Logs estruturados por pagina/acao; registrar falhas de sync e tempo de sincronizacao.
+- Traces de chamadas HTTP; spans manuais para etapas de sync.
+- Metrics: itens sincronizados, tamanho de fila offline, latencia de sync.
+
+## 6) Offline e sincronizacao
+- Fila local (SQLite/arquivo) para comandos quando offline.
+- Processador de fila com retry exponencial e deduplicacao.
+- Cache local para leituras (stale-while-revalidate simples).
+
+## 7) Testes
+- Unit: state containers, orchestradores de sync, policies de retry.
+- Integration: cenarios offline/online alternando, validando persistencia local e reenvio.
+
+## 8) Checklist
+- Observabilidade ativa (logs + traces + metrics) cobrindo sync.
+- Retry configurado em chamadas HTTP.
+- Offline/queue local implementados e testados.

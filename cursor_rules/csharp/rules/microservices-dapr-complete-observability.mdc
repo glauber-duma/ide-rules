@@ -1,0 +1,262 @@
+---
+Rule: microservices-dapr-complete-observability.mdc
+Description: Padroes completos para microservicos com Dapr, resiliencia, observabilidade e entrega via containers.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/dapr/**/*.yaml", "**/docker-compose*.yml", "**/Dockerfile"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "microservices", "dapr", "observability", "resilience", "docker", "kafka", "redis"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Microservicos completos com Dapr
+
+## 1) Objetivo
+Padronizar microservicos completos com Dapr, resiliencia, observabilidade ponta-a-ponta e empacotamento Docker/Compose.
+
+## 2) Estrutura de pastas
+```
+src/
+  Api/
+    Controllers/
+    Filters/
+    Program.cs
+  Application/
+    Commands/Queries/
+    Handlers/
+    DTOs/Validators/
+  Domain/
+    Entities/ValueObjects/Events/
+    Abstractions/
+  Infrastructure/
+    Data/Repositories/UnitOfWork/
+    Messaging/
+    Dapr/
+    Observability/
+  Shared/
+    Contracts/
+    Abstractions/
+dapr/
+  components/
+  config/
+deploy/
+  docker-compose.yml
+  Dockerfile
+tests/
+  Unit/
+  Integration/
+```
+
+## 3) Pacotes recomendados
+- Dapr.AspNetCore, Dapr.Client
+- MediatR
+- Polly, Polly.Extensions.Http
+- Serilog.AspNetCore, Serilog.Sinks.Console
+- OpenTelemetry.Extensions.Hosting
+- OpenTelemetry.Instrumentation.AspNetCore, OpenTelemetry.Instrumentation.Http
+- OpenTelemetry.Exporter.OpenTelemetryProtocol
+- Microsoft.EntityFrameworkCore (ou provider escolhido)
+- FluentValidation
+
+## 4) Configuracao (Program.cs + appsettings)
+```json
+{
+  "Serilog": {
+    "MinimumLevel": "Information",
+    "WriteTo": [{ "Name": "Console" }]
+  },
+  "OpenTelemetry": {
+    "ServiceName": "orders-api",
+    "OtlpEndpoint": "http://otel-collector:4317"
+  }
+}
+```
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Host.UseSerilog((ctx, cfg) => cfg.ReadFrom.Configuration(ctx.Configuration));
+
+builder.Services.AddControllers(opt => opt.Filters.Add<CorrelationIdFilter>());
+builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssemblyContaining<Program>());
+
+builder.Services.AddDaprClient();
+builder.Services.AddOpenTelemetry()
+    .WithTracing(t => t
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddSource("Orders"))
+    .WithMetrics(m => m.AddAspNetCoreInstrumentation());
+
+builder.Services.AddHttpClient("dapr", c =>
+{
+    c.BaseAddress = new Uri("http://localhost:3500");
+}).AddPolicyHandler(Policy.TimeoutAsync<HttpResponseMessage>(TimeSpan.FromSeconds(5)))
+  .AddPolicyHandler(Policy<HttpResponseMessage>.Handle<HttpRequestException>().CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
+
+var app = builder.Build();
+app.UseSerilogRequestLogging();
+app.MapHealthChecks("/healthz");
+app.MapControllers();
+app.MapSubscribeHandler();
+app.Run();
+```
+
+## 5) Dockerfile (API)
+```Dockerfile
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
+WORKDIR /app
+
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+COPY . .
+RUN dotnet restore ./src/Api/Api.csproj
+RUN dotnet publish ./src/Api/Api.csproj -c Release -o /app/publish
+
+FROM base AS final
+WORKDIR /app
+COPY --from=build /app/publish .
+ENTRYPOINT ["dotnet", "Api.dll"]
+```
+
+## 6) docker-compose com Dapr (Kafka pub/sub + Redis state)
+```yaml
+version: "3.9"
+services:
+  api:
+    build: ..
+    container_name: orders-api
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+      - kafka
+      - placement
+
+  api-dapr:
+    image: "daprio/daprd:1.14"
+    command: ["/daprd", "-app-id", "orders-api", "-app-port", "8080", "-placement-host-address", "placement:50005", "-components-path", "/components", "-config", "/config/config.yaml"]
+    volumes:
+      - ../dapr/components/:/components
+      - ../dapr/config/:/config
+    network_mode: "service:api"
+    depends_on:
+      - api
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+
+  placement:
+    image: "daprio/placement:1.14"
+    command: ["placement", "-port", "50005"]
+    ports:
+      - "50005:50005"
+```
+
+## 7) Componentes Dapr (exemplos)
+`dapr/components/pubsub-kafka.yaml`
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: pubsub
+spec:
+  type: pubsub.kafka
+  version: v1
+  metadata:
+  - name: brokers
+    value: kafka:9092
+  - name: consumerGroup
+    value: orders
+  - name: authRequired
+    value: "false"
+```
+
+`dapr/components/statestore-redis.yaml`
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+  - name: redisHost
+    value: redis:6379
+  - name: redisPassword
+    value: ""
+  - name: actorStateStore
+    value: "true"
+```
+
+## 8) Publicacao/assinatura e invocacao
+```csharp
+[ApiController]
+[Route("orders")]
+public class OrdersController : ControllerBase
+{
+    private readonly DaprClient _dapr;
+    public OrdersController(DaprClient dapr) => _dapr = dapr;
+
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateOrder cmd)
+    {
+        await _dapr.PublishEventAsync("pubsub", "orders.created", cmd);
+        return Accepted();
+    }
+}
+
+[Topic("pubsub", "orders.created")]
+public class OrderCreatedHandler : IEventHandler<OrderCreated>
+{
+    public Task Handle(OrderCreated evt, CancellationToken ct)
+    {
+        // processa evento
+        return Task.CompletedTask;
+    }
+}
+```
+
+## 9) Resiliencia e confiabilidade
+- Polly para retries, timeout e circuit breaker em HTTP gRPC/actors.
+- Idempotencia em handlers (chaves de deduplicacao em state store).
+- Padrão Outbox para eventos de dominio persistidos antes do publish.
+
+## 10) Observabilidade
+- Tracing distribuido com OTel + OTLP para collector. Inclua traceId em logs Serilog.
+- Metrics: requisições HTTP, latencia, erros, retries.
+- Logs estruturados com correlation id (traceparent) em cada handler/command.
+
+## 11) Testes
+- Unit: handlers MediatR, validators, repositories (com fakes ou InMemoryDb).
+- Integration: usar Testcontainers para Redis + Kafka + Dapr sidecar (dapr-dev container).
+- Contratos: gerar schemas de eventos e validar com consumidores.
+
+## 12) Checklist
+- Dockerfile e docker-compose presentes e funcionais com Dapr sidecar.
+- Componentes Dapr (Kafka pub/sub, Redis state) configurados.
+- Observabilidade ligada (logs + traces + metrics) e health checks publicados.
+- Resiliencia com Polly e idempotencia ativa.
+- Testes unitarios e de integracao cobrindo fluxo principal e pub/sub.

@@ -1,0 +1,107 @@
+---
+Rule: microservices-simple-observability.mdc
+Description: Padroes para microservicos simples sem Dapr, com observabilidade.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "microservices", "observability"]
+Author: Glauber Duma
+---
+Rule: microservices-simple-observability.mdc
+Description: Padroes para microservicos simples sem Dapr, com observabilidade e boas praticas essenciais.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/Dockerfile", "**/docker-compose*.yml"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "microservices", "observability", "docker"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Microservicos simples sem Dapr
+
+## 1) Objetivo
+Entregar microservicos simples sem Dapr, com observabilidade, resiliencia leve e camadas bem definidas.
+
+## 2) Estrutura de pastas
+```
+src/
+  Api/
+    Controllers/
+    Program.cs
+  Application/
+    Services/
+    DTOs/Validators/
+  Domain/
+    Entities/ValueObjects/
+  Infrastructure/
+    Data/Repositories/
+    Observability/
+deploy/
+  Dockerfile
+tests/
+  Unit/
+  Integration/
+```
+
+## 3) Pacotes recomendados
+- Serilog.AspNetCore, Serilog.Sinks.Console
+- OpenTelemetry.Extensions.Hosting
+- OpenTelemetry.Instrumentation.AspNetCore, OpenTelemetry.Instrumentation.Http
+- OpenTelemetry.Exporter.OpenTelemetryProtocol
+- MediatR
+- FluentValidation
+
+## 4) Configuracao (Program.cs)
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Host.UseSerilog((ctx, cfg) => cfg.ReadFrom.Configuration(ctx.Configuration));
+
+builder.Services.AddControllers();
+builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssemblyContaining<Program>());
+builder.Services.AddOpenTelemetry()
+    .WithTracing(t => t.AddAspNetCoreInstrumentation().AddHttpClientInstrumentation())
+    .WithMetrics(m => m.AddAspNetCoreInstrumentation());
+
+var app = builder.Build();
+app.UseSerilogRequestLogging();
+app.MapHealthChecks("/healthz");
+app.MapControllers();
+app.Run();
+```
+
+## 5) Dockerfile (API)
+```Dockerfile
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
+WORKDIR /app
+
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+COPY . .
+RUN dotnet restore ./src/Api/Api.csproj
+RUN dotnet publish ./src/Api/Api.csproj -c Release -o /app/publish
+
+FROM base AS final
+WORKDIR /app
+COPY --from=build /app/publish .
+ENTRYPOINT ["dotnet", "Api.dll"]
+```
+
+## 6) Observabilidade
+- Logs estruturados com Serilog e traceId.
+- Traces e metrics via OpenTelemetry (exporter OTLP).
+- Health checks em `/healthz`.
+
+## 7) Testes
+- Unit: services, validators.
+- Integration: endpoints com WebApplicationFactory; opcionalmente banco em container.
+
+## 8) Checklist
+- Dockerfile presente.
+- Observabilidade ativa (logs + traces + healthcheck).
+- Testes unitarios e de integracao basicos prontos.
+- Integration: endpoints.
+
+## 9) Checklist
+- Observabilidade ativa.
+- Sem Dapr.

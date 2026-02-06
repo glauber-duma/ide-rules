@@ -9,7 +9,7 @@ Este repositorio organiza rules (.mdc) e prompts (.md) para:
 - Padroes de codigo e estilo.
 - Arquitetura e organizacao de projetos.
 - Boas praticas especificas (API, middleware, validacao, seguranca, cache, dados, mensageria, etc.).
-- Templates de referencia para equipes.
+- Templates de referencia para equipes, agora com exemplos de codigo, configuracao de observabilidade e conteinerizacao (Docker/Docker Compose para cenarios Dapr).
 
 ## Estrutura
 
@@ -22,6 +22,36 @@ cursor_rules/
 		inso/
 			app-batch.mdc
 			prompt_app_batch.md
+		prompts/
+			prompt-api-mvc-auth-observability.md
+			prompt-api-mvc-simple-observability.md
+			prompt-console-batch-complete-observability.md
+			prompt-console-batch-simple-observability.md
+			prompt-desktop-blazor-complete-auth-observability.md
+			prompt-desktop-blazor-complete-observability.md
+			prompt-desktop-blazor-simple-auth-observability.md
+			prompt-desktop-blazor-simple-observability.md
+			prompt-microservices-complete-observability.md
+			prompt-microservices-dapr-complete-observability.md
+			prompt-microservices-dapr-simple-observability.md
+			prompt-microservices-simple-observability.md
+			prompt-web-mvc-auth-observability.md
+			prompt-web-mvc-simple-observability.md
+		rules/
+			api-mvc-auth-observability.mdc
+			api-mvc-simple-observability.mdc
+			console-batch-complete-observability.mdc
+			console-batch-simple-observability.mdc
+			desktop-blazor-complete-auth-observability.mdc
+			desktop-blazor-complete-observability.mdc
+			desktop-blazor-simple-auth-observability.mdc
+			desktop-blazor-simple-observability.mdc
+			microservices-complete-observability.mdc
+			microservices-dapr-complete-observability.mdc
+			microservices-dapr-simple-observability.mdc
+			microservices-simple-observability.mdc
+			web-mvc-auth-observability.mdc
+			web-mvc-simple-observability.mdc
 	python/
 		api/
 			fastapi-project.mdc
@@ -64,7 +94,7 @@ cursor_rules/
 
 1. Escolha a regra apropriada na arvore `cursor_rules/`.
 2. Aplique no editor (Cursor/VS Code) conforme o fluxo do seu time.
-3. Use os prompts quando precisar gerar uma nova versao da regra ou ampliar exemplos.
+3. Use os prompts quando precisar gerar uma nova versao da regra ou ampliar exemplos; regras de microservicos incluem Dockerfile e docker-compose (sidecar Dapr, Kafka, Redis) e componentes Dapr prontos para pub/sub e state.
 
 ## Regras disponiveis (resumo)
 
@@ -72,6 +102,20 @@ cursor_rules/
 
 - `csharp-style-guide.mdc`: guia de estilo e boas praticas para projetos .NET.
 - `app-batch.mdc`: padroes para console apps e processamento em lote.
+- `web-mvc-simple-observability.mdc`: MVC simples sem autenticacao, com observabilidade.
+- `web-mvc-auth-observability.mdc`: MVC com autenticacao/autorizacao e observabilidade.
+- `api-mvc-simple-observability.mdc`: API MVC simples sem autenticacao, com observabilidade.
+- `api-mvc-auth-observability.mdc`: API MVC com autenticacao/autorizacao e observabilidade.
+- `microservices-dapr-simple-observability.mdc`: microservicos simples com Dapr, Dockerfile, docker-compose (sidecar), componentes Kafka/Redis e exemplos de publish/subscribe.
+- `microservices-dapr-complete-observability.mdc`: microservicos completos com Dapr, resiliencia, Dockerfile, docker-compose (sidecar), componentes Kafka/Redis e exemplos de handlers.
+- `microservices-simple-observability.mdc`: microservicos simples sem Dapr, com observabilidade, Dockerfile e testes.
+- `microservices-complete-observability.mdc`: microservicos completos sem Dapr, com resiliencia (Polly), mensageria (Kafka), Dockerfile e docker-compose.
+- `console-batch-simple-observability.mdc`: batch simples para integracao legada.
+- `console-batch-complete-observability.mdc`: batch completo para integracao legada.
+- `desktop-blazor-simple-observability.mdc`: desktop Blazor Hybrid simples.
+- `desktop-blazor-complete-observability.mdc`: desktop Blazor Hybrid completo.
+- `desktop-blazor-simple-auth-observability.mdc`: desktop Blazor Hybrid com auth.
+- `desktop-blazor-complete-auth-observability.mdc`: desktop Blazor Hybrid completo com auth.
 
 ### Python / FastAPI
 

@@ -1,0 +1,76 @@
+---
+Rule: desktop-blazor-simple-observability.mdc
+Description: Padroes para desktop Blazor Hybrid simples com observabilidade.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/*.razor"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "desktop", "blazor", "observability"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Desktop Blazor Hybrid simples
+
+## 1) Objetivo
+Padronizar apps desktop Blazor Hybrid simples, com observabilidade e suporte basico a offline/cache.
+
+## 2) Estrutura de pastas
+```
+src/
+  App/
+    Pages/
+    Components/
+    Services/
+    State/
+    Program.cs
+  Infrastructure/
+    Observability/
+    Offline/
+tests/
+  Unit/
+  Integration/
+```
+
+## 3) Pacotes recomendados
+- Serilog.Extensions.Logging, Serilog.Sinks.Console
+- OpenTelemetry.Extensions.Hosting
+- OpenTelemetry.Instrumentation.Http
+- MediatR
+- Polly (chamadas HTTP resilientes)
+
+## 4) Configuracao (Program.cs)
+```csharp
+var builder = MauiApp.CreateBuilder();
+builder.UseMauiApp<App>();
+
+builder.Logging.AddSerilog(new LoggerConfiguration().WriteTo.Console().CreateLogger());
+
+builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssemblyContaining<App>());
+builder.Services.AddOpenTelemetry()
+    .WithTracing(t => t.AddHttpClientInstrumentation());
+
+builder.Services.AddHttpClient("api")
+    .AddPolicyHandler(Policy.TimeoutAsync<HttpResponseMessage>(TimeSpan.FromSeconds(10)));
+
+builder.Services.AddSingleton<AppState>();
+
+return builder.Build();
+```
+
+## 5) Observabilidade
+- Logs estruturados (UI e services) enviados ao console.
+- Traces de chamadas HTTP para APIs.
+- Capturar excecoes globais e registrar com correlation id local.
+
+## 6) Offline/cache
+- Cache local (Preferences/SQLite) para dados lidos.
+- Estrategia cache-first com expiracao simples.
+
+## 7) Testes
+- Unit: state management e services.
+- Integration: chamadas HTTP mockadas para validar comportamento offline/online.
+
+## 8) Checklist
+- Logging e tracing habilitados.
+- Cache/offline basico configurado.
+- Testes unitarios cobrindo state/services.

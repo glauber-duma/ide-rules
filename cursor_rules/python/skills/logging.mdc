@@ -1,0 +1,82 @@
+# Skill: Strucutured Logging in Python with ll_py_logs
+
+## Overview
+
+This skill focuses on implementing structured logging in Python applications using the `ll_py_logs` library. Structured logging allows for more meaningful and queryable log data, improving observability and debugging capabilities.
+
+## Architecture
+
+```
+src/infrastructure/logs/
+├── custom_logger.py          # Base logger with DLP filters
+├── application_logger.py     # High-level logger for use cases
+├── application_log.py        # Pydantic models for structured logs
+└── user_context.py           # User context for request-scoped logging
+```
+
+## Base logger (infrastructure/Middleware)
+
+### Usage
+
+```python
+from src.infrastructure.logs import custom_logger
+
+logger = custom_logger.get_logger("MyComponent")
+
+# Simple log
+logger.info("This is an info message")
+
+# Warning with context
+logger.warning("This is a warning with context", extra={"user_id": "123", "
+
+# Error with exception
+try:
+    1 / 0
+except ZeroDivisionError as e:
+    logger.error("An error occurred", exc_info=e)
+
+# Debug (only show when LOG_LEVEL=DEBUG)
+logger.debug("This is a debug message")
+
+```
+
+### Features
+- **JSON Structured Logs**: Machine readable format.
+- **DLP Filters**: Automatically redact sensitive data based on patterns(token, password, scret).
+- **Datadog Tracing**: inject trace_id, span_id, env, service, version.
+- **Log Levels**: Configurable log levels (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+
+## Application Logger (Use Cases)
+
+### BaseUseCase Integration
+All use cases inherit from `BaseUseCase`, which provides integrated logging:
+
+```python
+from src.application.use_cases.base_use_case import BaseUseCase
+
+class CreateUserUseCase(BaseUseCase):
+    def __init__(self, component_name="CreateUserUseCase"):
+        super().__init__(component_name)
+
+    async def execute(self, user_request: UserRequest) -> User:
+        return await self._execute_with_login(
+            self._execute,
+            params={"name": user_request.name, "id": user_request.id},
+            correlation_id=user_request.correlation_id
+        )
+
+
+    async def _execute(self, user_request: UserRequest) -> User:
+        # Log during execution
+        self.logger.info("Executing CreateUserUseCase", extra={"user_request": user_request.dict
+
+        # ... business logic ...
+
+        # log errors
+        try: 
+            # ... some code that may raise an exception ...
+        except Exception as e:
+            self.logger.error("Error in CreateUserUseCase", exc_info=e)
+            raise       
+```
+

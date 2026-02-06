@@ -1,0 +1,121 @@
+---
+Rule: api-mvc-simple-observability.mdc
+Description: Padroes para API MVC simples sem autenticacao, com observabilidade.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "api", "mvc", "observability"]
+---
+Rule: api-mvc-simple-observability.mdc
+Description: Padroes para API MVC simples sem autenticacao, com observabilidade e camadas claras.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/Dockerfile"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "api", "mvc", "observability", "docker"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# API simples sem autenticacao
+
+## 1) Objetivo
+Padronizar APIs ASP.NET Core MVC (controllers) simples, sem autenticacao, com observabilidade.
+
+## 2) Estrutura de pastas
+```
+src/
+  Api/
+    Controllers/
+    Filters/
+    Program.cs
+  Application/
+    Services/
+    DTOs/Validators/
+  Domain/
+    Entities/ValueObjects/
+  Infrastructure/
+    Data/Repositories/
+    Observability/
+deploy/
+  Dockerfile
+tests/
+  Unit/
+  Integration/
+```
+
+## 3) Pacotes recomendados
+- Serilog.AspNetCore, Serilog.Sinks.Console
+- OpenTelemetry.Extensions.Hosting
+- OpenTelemetry.Instrumentation.AspNetCore, OpenTelemetry.Instrumentation.Http
+- OpenTelemetry.Exporter.OpenTelemetryProtocol
+- MediatR
+- FluentValidation
+- Microsoft.EntityFrameworkCore
+
+## 4) Configuracao (Program.cs)
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+builder.Host.UseSerilog((ctx, cfg) => cfg.ReadFrom.Configuration(ctx.Configuration));
+
+builder.Services.AddControllers(opt => opt.Filters.Add<CorrelationIdFilter>());
+builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssemblyContaining<Program>());
+builder.Services.AddOpenTelemetry()
+    .WithTracing(t => t.AddAspNetCoreInstrumentation().AddHttpClientInstrumentation())
+    .WithMetrics(m => m.AddAspNetCoreInstrumentation());
+
+var app = builder.Build();
+app.UseSerilogRequestLogging();
+app.MapHealthChecks("/healthz");
+app.MapControllers();
+app.Run();
+```
+
+## 5) Exemplo de controller
+```csharp
+[ApiController]
+[Route("api/products")]
+public class ProductsController : ControllerBase
+{
+    private readonly IMediator _mediator;
+    public ProductsController(IMediator mediator) => _mediator = mediator;
+
+    [HttpGet]
+    public Task<IReadOnlyList<ProductDto>> Get() => _mediator.Send(new ListProductsQuery());
+}
+```
+
+## 6) Observabilidade
+- Logs estruturados com traceId/correlation id.
+- Traces e metrics via OpenTelemetry; exporter OTLP.
+- Health check exposto em `/healthz`.
+
+## 7) Testes
+- Unit: services, handlers e validators.
+- Integration: controllers com WebApplicationFactory; banco em memoria/SQLite/containers.
+
+## 8) Dockerfile (opcional)
+```Dockerfile
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
+WORKDIR /app
+
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+COPY . .
+RUN dotnet restore ./src/Api/Api.csproj
+RUN dotnet publish ./src/Api/Api.csproj -c Release -o /app/publish
+
+FROM base AS final
+WORKDIR /app
+COPY --from=build /app/publish .
+ENTRYPOINT ["dotnet", "Api.dll"]
+```
+
+## 9) Checklist
+- Observabilidade ativa (logs + traces + metrics + healthcheck).
+- Camadas separadas e controllers finos.
+- Testes unitarios(xunit/moq/fluentassertions) e de integracao cobrindo endpoints principais.
+
+## 9) Checklist
+- Sem autenticacao/autorizacao.
+- Observabilidade ativa.
+- Testes com xUnit.

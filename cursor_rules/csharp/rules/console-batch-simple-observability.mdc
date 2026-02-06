@@ -1,0 +1,117 @@
+---
+Rule: console-batch-simple-observability.mdc
+Description: Padroes para console app batch simples com observabilidade e integracao legada.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "console", "batch", "observability"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Console batch simples com observabilidade
+
+---
+Rule: console-batch-simple-observability.mdc
+Description: Padroes para aplicacoes console simples (batch) com observabilidade.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/Dockerfile"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "console", "batch", "observability", "docker"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Console simples com observabilidade
+
+## 1) Objetivo
+Padronizar apps console focados em processos batch simples, com logging estruturado e tracing.
+
+## 2) Estrutura de pastas
+```
+src/
+  App/
+    Program.cs
+    Jobs/
+  Application/
+    Services/
+  Infrastructure/
+    Observability/
+deploy/
+  Dockerfile
+tests/
+  Unit/
+```
+
+## 3) Pacotes recomendados
+- Serilog.Extensions.Hosting, Serilog.Sinks.Console
+- OpenTelemetry.Extensions.Hosting
+- OpenTelemetry.Instrumentation.Http
+- OpenTelemetry.Exporter.OpenTelemetryProtocol
+- MediatR (para orquestrar jobs/comandos)
+
+## 4) Configuracao (Program.cs)
+```csharp
+using Microsoft.Extensions.Hosting;
+using Serilog;
+using OpenTelemetry.Trace;
+
+Host.CreateDefaultBuilder(args)
+    .UseSerilog((ctx, cfg) => cfg.ReadFrom.Configuration(ctx.Configuration))
+    .ConfigureServices((ctx, services) =>
+    {
+        services.AddMediatR(cfg => cfg.RegisterServicesFromAssemblyContaining<Program>());
+        services.AddOpenTelemetry()
+            .WithTracing(t => t.AddHttpClientInstrumentation().AddSource("BatchJobs"));
+        services.AddHostedService<ImportJob>();
+    })
+    .Build()
+    .Run();
+```
+
+## 5) Exemplo de Job
+```csharp
+public class ImportJob : BackgroundService
+{
+    private readonly ILogger<ImportJob> _logger;
+    public ImportJob(ILogger<ImportJob> logger) => _logger = logger;
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation("Import job started");
+        // processamento aqui
+        await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
+        _logger.LogInformation("Import job finished");
+    }
+}
+```
+
+## 6) Observabilidade
+- Logs estruturados com Serilog.
+- Tracing de chamadas HTTP (quando existirem) e spans manuais para etapas do job.
+
+## 7) Dockerfile (opcional)
+```Dockerfile
+FROM mcr.microsoft.com/dotnet/runtime:9.0 AS base
+WORKDIR /app
+
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+COPY . .
+RUN dotnet restore ./src/App/App.csproj
+RUN dotnet publish ./src/App/App.csproj -c Release -o /app/publish
+
+FROM base AS final
+WORKDIR /app
+COPY --from=build /app/publish .
+ENTRYPOINT ["dotnet", "App.dll"]
+```
+
+## 8) Testes
+- Unit: services e orquestradores dos jobs.
+- Smoke: execucao do binario validando codigo de saida.
+
+## 9) Checklist
+- Observabilidade ativa (logs + traces quando aplicavel).
+- Job principal coberto por testes unitarios.
+- Dockerfile pronto se necessitar conteinerizacao.

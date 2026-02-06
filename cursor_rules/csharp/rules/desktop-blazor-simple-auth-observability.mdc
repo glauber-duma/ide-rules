@@ -1,0 +1,87 @@
+---
+Rule: desktop-blazor-simple-auth-observability.mdc
+Description: Padroes para desktop Blazor Hybrid simples com autenticacao (OIDC/PKCE) e observabilidade.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/*.razor"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "desktop", "blazor", "auth", "observability"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Desktop Blazor Hybrid com autenticacao
+
+## 1) Objetivo
+Padronizar apps desktop Blazor Hybrid simples com autenticacao (OIDC + PKCE) e observabilidade.
+
+## 2) Estrutura de pastas
+```
+src/
+  App/
+    Pages/
+    Components/
+    Auth/
+    Services/
+    State/
+    Program.cs
+  Infrastructure/
+    Security/
+    Observability/
+    Offline/
+tests/
+  Unit/
+  Integration/
+```
+
+## 3) Pacotes recomendados
+- IdentityModel.OidcClient
+- Serilog.Extensions.Logging, Serilog.Sinks.Console
+- OpenTelemetry.Extensions.Hosting
+- OpenTelemetry.Instrumentation.Http
+- MediatR
+- Polly
+
+## 4) Configuracao (OIDC + Program.cs)
+```csharp
+var builder = MauiApp.CreateBuilder();
+builder.UseMauiApp<App>();
+
+builder.Logging.AddSerilog(new LoggerConfiguration().WriteTo.Console().CreateLogger());
+
+builder.Services.AddSingleton(new OidcClient(new OidcClientOptions
+{
+    Authority = builder.Configuration["Auth:Authority"],
+    ClientId = builder.Configuration["Auth:ClientId"],
+    Scope = "openid profile api.read",
+    RedirectUri = "myapp://callback",
+    Browser = new WebAuthenticatorBrowser()
+}));
+
+builder.Services.AddOpenTelemetry().WithTracing(t => t.AddHttpClientInstrumentation());
+builder.Services.AddHttpClient("api")
+    .AddPolicyHandler(Policy.TimeoutAsync<HttpResponseMessage>(TimeSpan.FromSeconds(10)));
+
+builder.Services.AddSingleton<AppState>();
+
+return builder.Build();
+```
+
+## 5) Observabilidade
+- Logs estruturados de login/logout (sem tokens).
+- Traces de chamadas HTTP autenticadas; propague Authorization nos HttpClient.
+
+## 6) Seguranca e autorizacao
+- PKCE obrigatorio; tokens armazenados de forma segura (SecureStorage/Keychain).
+- Renovacao de tokens com refresh quando suportado.
+
+## 7) Offline/cache
+- Cache local para dados lidos; fila local opcional para comandos simples.
+
+## 8) Testes
+- Unit: auth service (fluxo PKCE) mockando navegador; state management.
+- Integration: chamadas HTTP autenticadas contra API mockada.
+
+## 9) Checklist
+- OIDC/PKCE configurado e seguro.
+- Observabilidade ativa (logs + traces) sem expor segredos.
+- Cache/offline basico e testes de auth executados.

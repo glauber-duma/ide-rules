@@ -1,0 +1,129 @@
+---
+Rule: api-mvc-auth-observability.mdc
+Description: Padroes para API MVC com autenticacao/autorizacao (JWT Bearer) e observabilidade.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/Dockerfile"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "api", "mvc", "auth", "observability", "docker"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# API com autenticacao
+
+## 1) Objetivo
+Padronizar APIs ASP.NET Core MVC com autenticacao/autorizacao via JWT Bearer e observabilidade.
+
+## 2) Estrutura de pastas
+```
+src/
+  Api/
+    Controllers/
+    Filters/
+    Program.cs
+  Application/
+    Services/
+    DTOs/Validators/
+  Domain/
+    Entities/ValueObjects/
+  Infrastructure/
+    Identity/
+    Data/Repositories/
+    Observability/
+deploy/
+  Dockerfile
+tests/
+  Unit/
+  Integration/
+```
+
+## 3) Pacotes recomendados
+- Microsoft.AspNetCore.Authentication.JwtBearer
+- Serilog.AspNetCore, Serilog.Sinks.Console
+- OpenTelemetry.Extensions.Hosting
+- OpenTelemetry.Instrumentation.AspNetCore, OpenTelemetry.Instrumentation.Http
+- OpenTelemetry.Exporter.OpenTelemetryProtocol
+- MediatR
+- FluentValidation
+- Microsoft.EntityFrameworkCore
+
+## 4) Configuracao (Program.cs)
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+builder.Host.UseSerilog((ctx, cfg) => cfg.ReadFrom.Configuration(ctx.Configuration));
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.Authority = builder.Configuration["Auth:Authority"];
+        options.Audience = builder.Configuration["Auth:Audience"];
+        options.TokenValidationParameters.ValidateLifetime = true;
+    });
+
+builder.Services.AddAuthorization(opt =>
+{
+    opt.AddPolicy("api.read", p => p.RequireClaim("scope", "api.read"));
+});
+
+builder.Services.AddControllers(opt =>
+{
+    opt.Filters.Add<AuthorizeFilter>();
+    opt.Filters.Add<CorrelationIdFilter>();
+});
+
+builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssemblyContaining<Program>());
+builder.Services.AddOpenTelemetry()
+    .WithTracing(t => t.AddAspNetCoreInstrumentation().AddHttpClientInstrumentation())
+    .WithMetrics(m => m.AddAspNetCoreInstrumentation());
+
+var app = builder.Build();
+app.UseSerilogRequestLogging();
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapHealthChecks("/healthz");
+app.MapControllers();
+app.Run();
+```
+
+## 5) Exemplo de controller protegido
+```csharp
+[ApiController]
+[Route("api/orders")]
+[Authorize(Policy = "api.read")]
+public class OrdersController : ControllerBase
+{
+    [HttpGet]
+    public IEnumerable<string> Get() => new[] { "order-1", "order-2" };
+}
+```
+
+## 6) Observabilidade
+- Logs estruturados com userId/tenant (sem dados sensiveis), traceId e correlation id.
+- Traces e metrics via OpenTelemetry; exporter OTLP.
+- Health checks expostos e protegidos conforme necessidade.
+
+## 7) Testes
+- Unit: services, handlers, validators, utilizar xunit/moq/fluentassertions.
+- Integration: endpoints protegidos com JWT mockado via WebApplicationFactory.
+
+## 8) Dockerfile (opcional)
+```Dockerfile
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
+WORKDIR /app
+
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+COPY . .
+RUN dotnet restore ./src/Api/Api.csproj
+RUN dotnet publish ./src/Api/Api.csproj -c Release -o /app/publish
+
+FROM base AS final
+WORKDIR /app
+COPY --from=build /app/publish .
+ENTRYPOINT ["dotnet", "Api.dll"]
+```
+
+## 9) Checklist
+- JWT Bearer configurado (authority/audience, policies).
+- Observabilidade ativa (logs + traces + metrics + healthcheck).
+- Testes unitarios e integracao cobrindo rotas protegidas.

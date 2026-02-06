@@ -1,0 +1,190 @@
+---
+Rule: microservices-complete-observability.mdc
+Description: Padroes para microservicos completos sem Dapr, com observabilidade.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "microservices", "observability", "resilience"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Microservicos completos sem Dapr
+
+## 1) Objetivo
+Padronizar microservicos completos com mensageria e observabilidade.
+
+## 2) Estrutura de pastas
+```
+src/
+  Api/
+  Application/
+  Domain/
+  Infrastructure/
+    Messaging/
+    Data/
+    Resilience/
+  Tests/
+    Unit/
+    Integration/
+```
+
+## 3) Pacotes recomendados
+---
+Rule: microservices-complete-observability.mdc
+Description: Padroes para microservicos completos sem Dapr, com observabilidade, resiliencia e mensageria.
+globs: ["**/*.cs", "**/*.csproj", "**/appsettings*.json", "**/Dockerfile", "**/docker-compose*.yml"]
+rules: @csharp-style-guide
+alwaysApply: false
+tags: ["csharp", "microservices", "observability", "resilience", "docker", "kafka"]
+Author: Glauber Duma
+Created: 2026-02
+---
+
+# Microservicos completos sem Dapr
+
+## 1) Objetivo
+Padronizar microservicos completos sem Dapr, com resiliencia (Polly), mensageria (Kafka ou RabbitMQ), observabilidade e empacotamento Docker.
+
+## 2) Estrutura de pastas
+```
+src/
+  Api/
+    Controllers/
+    Filters/
+    Program.cs
+  Application/
+    Commands/Queries/
+    Handlers/
+    DTOs/Validators/
+  Domain/
+    Entities/ValueObjects/Events/
+    Abstractions/
+  Infrastructure/
+    Data/Repositories/UnitOfWork/
+    Messaging/
+    Observability/
+  Shared/
+    Contracts/
+deploy/
+  docker-compose.yml
+  Dockerfile
+tests/
+  Unit/
+  Integration/
+```
+
+## 3) Pacotes recomendados
+- MediatR
+- Polly, Polly.Extensions.Http
+- Serilog.AspNetCore, Serilog.Sinks.Console
+- OpenTelemetry.Extensions.Hosting
+- OpenTelemetry.Instrumentation.AspNetCore, OpenTelemetry.Instrumentation.Http
+- OpenTelemetry.Exporter.OpenTelemetryProtocol
+- Refit (HTTP clients tipados)
+- MassTransit (Kafka ou RabbitMQ)
+- FluentValidation
+- Microsoft.EntityFrameworkCore
+
+## 4) Configuracao (Program.cs)
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Host.UseSerilog((ctx, cfg) => cfg.ReadFrom.Configuration(ctx.Configuration));
+
+builder.Services.AddControllers(opt => opt.Filters.Add<CorrelationIdFilter>());
+builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssemblyContaining<Program>());
+builder.Services.AddOpenTelemetry()
+    .WithTracing(t => t.AddAspNetCoreInstrumentation().AddHttpClientInstrumentation())
+    .WithMetrics(m => m.AddAspNetCoreInstrumentation());
+
+builder.Services.AddRefitClient<IInventoryClient>()
+    .ConfigureHttpClient(c => c.BaseAddress = new Uri(builder.Configuration["Services:Inventory"]!))
+    .AddPolicyHandler(Policy.TimeoutAsync<HttpResponseMessage>(TimeSpan.FromSeconds(5)))
+    .AddPolicyHandler(Policy<HttpResponseMessage>.Handle<HttpRequestException>().CircuitBreakerAsync(5, TimeSpan.FromSeconds(30)));
+
+builder.Services.AddMassTransit(x =>
+{
+    x.SetKebabCaseEndpointNameFormatter();
+    x.AddConsumers(typeof(Program).Assembly);
+    x.UsingKafka((ctx, cfg) =>
+    {
+        cfg.Host("kafka:9092");
+        cfg.ConfigureEndpoints(ctx);
+    });
+});
+
+var app = builder.Build();
+app.UseSerilogRequestLogging();
+app.MapHealthChecks("/healthz");
+app.MapControllers();
+app.Run();
+```
+
+## 5) Dockerfile (API)
+```Dockerfile
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
+WORKDIR /app
+
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+COPY . .
+RUN dotnet restore ./src/Api/Api.csproj
+RUN dotnet publish ./src/Api/Api.csproj -c Release -o /app/publish
+
+FROM base AS final
+WORKDIR /app
+COPY --from=build /app/publish .
+ENTRYPOINT ["dotnet", "Api.dll"]
+```
+
+## 6) docker-compose (Kafka)
+```yaml
+version: "3.9"
+services:
+  api:
+    build: ..
+    environment:
+      - ASPNETCORE_URLS=http://+:8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      - kafka
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+```
+
+## 7) Observabilidade
+- OTLP exporter para collector central.
+- Logs estruturados com traceId e correlation id.
+- Health checks em `/healthz` e dependencias (mensageria, DB).
+
+## 8) Resiliencia e confiabilidade
+- Polly: timeout, retry com jitter, circuit breaker.
+- Idempotencia: chaves de deduplicacao em mensagens e comandos.
+- Outbox: persistir eventos de dominio antes de publicar em Kafka.
+
+## 9) Testes
+- Unit: handlers MediatR, validators, domain services.
+- Integration: subir docker-compose (Kafka) e validar publish/consume; API end-to-end com banco em container.
+- Contratos: schemas Avro/JSON para eventos e consumidores.
+
+## 10) Checklist
+- Dockerfile e docker-compose presentes.
+- Observabilidade ativa (logs + traces + metrics).
+- Resiliencia configurada nos HTTP clients e consumers.
+- Testes unitarios e de integracao cobrindo fluxos principais e mensageria.
