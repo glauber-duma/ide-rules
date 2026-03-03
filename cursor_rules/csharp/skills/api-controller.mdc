@@ -1,0 +1,336 @@
+# Skill: API Controller REST com BaseApiController
+
+## Visão Geral
+
+> **Quando invocar:** usuário pede controller, endpoint, rota API, recurso REST ou qualquer elemento da camada de apresentação de uma API ASP.NET Core.
+
+---
+
+## Estrutura de Arquivos
+
+```
+Api/
+├── Controllers/
+│   ├── v1/
+│   │   ├── UsersController.cs
+│   │   └── ProductsController.cs
+│   └── BaseApiController.cs
+├── Models/
+│   ├── ApiProblemDetails.cs
+│   └── PagedResponse.cs
+└── Program.cs
+```
+
+---
+
+## Passo a Passo
+
+### 1. Primitivos do Domínio (uma vez por projeto)
+
+```csharp
+// Domain/Primitives/Result.cs
+namespace Company.Product.Domain.Primitives;
+
+public class Result
+{
+    public bool IsSuccess { get; }
+    public bool IsFailure => !IsSuccess;
+    public Error Error { get; }
+
+    protected Result(bool isSuccess, Error error)
+    {
+        IsSuccess = isSuccess;
+        Error = error;
+    }
+
+    public static Result Success() => new(true, Error.None);
+    public static Result Failure(Error error) => new(false, error);
+    public static Result<T> Success<T>(T value) => new(value, true, Error.None);
+    public static Result<T> Failure<T>(Error error) => new(default, false, error);
+}
+
+public sealed class Result<T> : Result
+{
+    private readonly T? _value;
+
+    internal Result(T? value, bool isSuccess, Error error)
+        : base(isSuccess, error) => _value = value;
+
+    public T Value => IsSuccess
+        ? _value!
+        : throw new InvalidOperationException("Failure result has no value.");
+}
+
+// Domain/Primitives/Error.cs
+public record Error(string Code, string Message, ErrorType Type, string[]? Errors = null)
+{
+    public static readonly Error None = new(string.Empty, string.Empty, ErrorType.None);
+
+    public static Error Validation(string code, string message, params string[] errors)
+        => new(code, message, ErrorType.Validation, errors);
+
+    public static Error NotFound(string code, string message)
+        => new(code, message, ErrorType.NotFound);
+
+    public static Error Conflict(string code, string message)
+        => new(code, message, ErrorType.Conflict);
+
+    public static Error Failure(string code, string message)
+        => new(code, message, ErrorType.Failure);
+
+    public static Error Unauthorized(string code, string message)
+        => new(code, message, ErrorType.Unauthorized);
+}
+
+public enum ErrorType { None, Validation, NotFound, Conflict, Failure, Unauthorized, Forbidden }
+```
+
+### 2. BaseApiController
+
+```csharp
+// Api/Controllers/BaseApiController.cs
+namespace Company.Product.Api.Controllers;
+
+[ApiController]
+[Route("api/v{version:apiVersion}/[controller]")]
+[Produces("application/json")]
+public abstract class BaseApiController : ControllerBase
+{
+    /// <summary>Converte Result&lt;T&gt; em IActionResult com status code correto.</summary>
+    protected IActionResult HandleResult<T>(Result<T> result)
+    {
+        if (result.IsSuccess)
+            return result.Value is null ? NoContent() : Ok(result.Value);
+
+        return HandleError(result.Error);
+    }
+
+    /// <summary>Converte Result (sem valor) em IActionResult.</summary>
+    protected IActionResult HandleResult(Result result)
+    {
+        if (result.IsSuccess) return NoContent();
+        return HandleError(result.Error);
+    }
+
+    /// <summary>Retorna 201 Created com Location header.</summary>
+    protected IActionResult CreatedResult<T>(string actionName, object routeValues, T value)
+        => CreatedAtAction(actionName, routeValues, value);
+
+    private IActionResult HandleError(Error error)
+    {
+        var statusCode = error.Type switch
+        {
+            ErrorType.Validation  => StatusCodes.Status400BadRequest,
+            ErrorType.NotFound    => StatusCodes.Status404NotFound,
+            ErrorType.Conflict    => StatusCodes.Status409Conflict,
+            ErrorType.Unauthorized => StatusCodes.Status401Unauthorized,
+            ErrorType.Forbidden   => StatusCodes.Status403Forbidden,
+            _                     => StatusCodes.Status500InternalServerError
+        };
+
+        var problem = new ApiProblemDetails
+        {
+            Type    = GetProblemType(error.Type),
+            Title   = GetProblemTitle(error.Type),
+            Status  = statusCode,
+            Detail  = error.Message,
+            Instance = HttpContext.Request.Path,
+            TraceId  = HttpContext.TraceIdentifier
+        };
+
+        if (error.Errors?.Length > 0)
+            problem.Errors = error.Errors;
+
+        return StatusCode(statusCode, problem);
+    }
+
+    private static string GetProblemType(ErrorType t) => t switch
+    {
+        ErrorType.Validation   => "https://tools.ietf.org/html/rfc7231#section-6.5.1",
+        ErrorType.NotFound     => "https://tools.ietf.org/html/rfc7231#section-6.5.4",
+        ErrorType.Conflict     => "https://tools.ietf.org/html/rfc7231#section-6.5.8",
+        ErrorType.Unauthorized => "https://tools.ietf.org/html/rfc7235#section-3.1",
+        _                      => "https://tools.ietf.org/html/rfc7231#section-6.6.1"
+    };
+
+    private static string GetProblemTitle(ErrorType t) => t switch
+    {
+        ErrorType.Validation   => "One or more validation errors occurred",
+        ErrorType.NotFound     => "The specified resource was not found",
+        ErrorType.Conflict     => "A conflict occurred",
+        ErrorType.Unauthorized => "Unauthorized",
+        _                      => "An error occurred processing your request"
+    };
+}
+```
+
+### 3. ApiProblemDetails (RFC 7807)
+
+```csharp
+// Api/Models/ApiProblemDetails.cs
+namespace Company.Product.Api.Models;
+
+public class ApiProblemDetails : ProblemDetails
+{
+    /// <summary>Lista de erros de validação.</summary>
+    public IEnumerable<string>? Errors { get; set; }
+
+    /// <summary>TraceId para correlação com logs.</summary>
+    public string? TraceId { get; set; }
+}
+```
+
+### 4. Controller Completo — CRUD de Usuários
+
+```csharp
+// Api/Controllers/v1/UsersController.cs
+namespace Company.Product.Api.Controllers.V1;
+
+[ApiVersion("1.0")]
+public class UsersController(IMediator mediator) : BaseApiController
+{
+    /// <summary>Retorna lista paginada de usuários.</summary>
+    [HttpGet]
+    [ProducesResponseType(typeof(PagedResult<UserResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiProblemDetails), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> GetAll(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 10,
+        [FromQuery] string? search = null,
+        CancellationToken ct = default)
+        => HandleResult(await mediator.Send(
+            new GetUsersPagedQuery { Page = page, PageSize = pageSize, Search = search }, ct));
+
+    /// <summary>Retorna usuário por ID.</summary>
+    [HttpGet("{id:guid}")]
+    [ProducesResponseType(typeof(UserResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
+        => HandleResult(await mediator.Send(new GetUserByIdQuery(id), ct));
+
+    /// <summary>Cria um novo usuário.</summary>
+    [HttpPost]
+    [ProducesResponseType(typeof(UserResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ApiProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Create(
+        [FromBody] CreateUserCommand command,
+        CancellationToken ct)
+    {
+        var result = await mediator.Send(command, ct);
+        if (result.IsFailure) return HandleResult(result);
+        return CreatedResult(nameof(GetById), new { id = result.Value.Id }, result.Value);
+    }
+
+    /// <summary>Atualiza usuário existente.</summary>
+    [HttpPut("{id:guid}")]
+    [ProducesResponseType(typeof(UserResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Update(
+        Guid id,
+        [FromBody] UpdateUserCommand command,
+        CancellationToken ct)
+        => HandleResult(await mediator.Send(command with { Id = id }, ct));
+
+    /// <summary>Remove usuário.</summary>
+    [HttpDelete("{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ApiProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+        => HandleResult(await mediator.Send(new DeleteUserCommand(id), ct));
+}
+```
+
+### 5. Configuração no Program.cs
+
+```csharp
+// Program.cs
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+
+// Versionamento
+builder.Services.AddApiVersioning(options =>
+{
+    options.DefaultApiVersion         = new ApiVersion(1);
+    options.AssumeDefaultVersionWhenUnspecified = true;
+    options.ReportApiVersions         = true;
+    options.ApiVersionReader          = new UrlSegmentApiVersionReader();
+})
+.AddApiExplorer(options =>
+{
+    options.GroupNameFormat           = "'v'VVV";
+    options.SubstituteApiVersionInUrl = true;
+});
+
+// Problem Details global
+builder.Services.AddProblemDetails();
+
+// Swagger com versionamento
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "My API", Version = "v1" });
+});
+```
+
+---
+
+## Exemplos de Cenários
+
+### Cenário 1 — Controller protegido com JWT
+
+```csharp
+[ApiVersion("1.0")]
+[Authorize]  // ← protege todos os endpoints
+public class OrdersController(IMediator mediator) : BaseApiController
+{
+    [HttpGet]
+    [Authorize(Roles = "Admin,Manager")]  // ← role específica
+    public async Task<IActionResult> GetAll(CancellationToken ct)
+        => HandleResult(await mediator.Send(new GetOrdersQuery(), ct));
+}
+```
+
+### Cenário 2 — Resposta de paginação com headers
+
+```csharp
+[HttpGet]
+public async Task<IActionResult> GetAll([FromQuery] GetProductsPagedQuery query, CancellationToken ct)
+{
+    var result = await mediator.Send(query, ct);
+    if (result.IsFailure) return HandleResult(result);
+
+    // Adiciona headers de paginação
+    Response.Headers["X-Total-Count"] = result.Value.Total.ToString();
+    Response.Headers["X-Total-Pages"] = result.Value.TotalPages.ToString();
+
+    return Ok(result.Value);
+}
+```
+
+---
+
+## Checklist de Qualidade
+
+- [ ] Controller herda de `BaseApiController` — **nunca** de `ControllerBase` diretamente
+- [ ] **Zero lógica de negócio** no controller — apenas delegar ao `IMediator`
+- [ ] Todos os endpoints com `[ProducesResponseType]` declarados
+- [ ] `HandleResult()` usado para converter `Result<T>` — **nunca** `if/else` manual de status code
+- [ ] `[ApiVersion]` declarado no controller
+- [ ] `Created` retorna `CreatedAtAction` com Location header correto
+- [ ] Injeção via **primary constructor** `(IMediator mediator)`
+
+---
+
+## Dependências NuGet
+
+```xml
+<PackageReference Include="Asp.Versioning.Mvc" Version="8.*" />
+<PackageReference Include="Asp.Versioning.Mvc.ApiExplorer" Version="8.*" />
+<PackageReference Include="Swashbuckle.AspNetCore" Version="7.*" />
+```
+
+## Rules Relacionadas
+
+- `@api-controllers` — regra base desta skill
+- `@use-cases` — o que o controller delega
+- `@observability` — logging e tracing integrados

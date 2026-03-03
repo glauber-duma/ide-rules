@@ -1,0 +1,354 @@
+# Skill: Dockerfile e Docker Compose para .NET
+
+## Visão Geral
+
+> **Quando invocar:** usuário pede Dockerfile, docker-compose, containerização, build Docker ou configuração de container para .NET.
+
+---
+
+## Estrutura de Arquivos
+
+```
+├── Dockerfile                     ← multi-stage, non-root
+├── .dockerignore                  ← excluir artefatos desnecessários
+├── docker-compose.yml             ← orquestração local/dev
+├── docker-compose.override.yml    ← sobrescritas de desenvolvimento
+└── deploy/
+    └── docker-compose.prod.yml    ← configuração de produção
+```
+
+---
+
+## Passo a Passo
+
+### 1. .dockerignore — excluir arquivos desnecessários
+
+```dockerignore
+# Build artifacts
+**/bin
+**/obj
+**/out
+
+# Git
+**/.git
+**/.gitignore
+**/.gitattributes
+
+# Logs e dados temporários
+**/logs
+**/*.log
+**/.vs
+**/*.user
+**/TestResults
+
+# Node (se houver frontend)
+**/node_modules
+**/.npm
+
+# Documentação
+**/README.md
+```
+
+### 2. Dockerfile ASP.NET Core API — Multi-stage + Non-root
+
+```dockerfile
+# syntax=docker/dockerfile:1.4
+# ============================================================
+# Stage 1: Restore — camada separada para cache de dependências
+# ============================================================
+FROM mcr.microsoft.com/dotnet/sdk:9.0-alpine AS restore
+WORKDIR /src
+
+# Copia apenas os arquivos de projeto (melhor cache de layers)
+COPY ["src/Api/Api.csproj",                 "src/Api/"]
+COPY ["src/Application/Application.csproj", "src/Application/"]
+COPY ["src/Domain/Domain.csproj",           "src/Domain/"]
+COPY ["src/Infrastructure/Infrastructure.csproj", "src/Infrastructure/"]
+
+RUN dotnet restore "src/Api/Api.csproj" --runtime linux-musl-x64
+
+# ============================================================
+# Stage 2: Build e Publish
+# ============================================================
+FROM restore AS build
+COPY . .
+
+WORKDIR "/src/src/Api"
+RUN dotnet publish "Api.csproj" \
+    --configuration Release \
+    --runtime linux-musl-x64 \
+    --self-contained false \
+    --no-restore \
+    --output /app/publish \
+    /p:PublishTrimmed=false
+
+# ============================================================
+# Stage 3: Runtime — imagem final, mínima e segura
+# ============================================================
+FROM mcr.microsoft.com/dotnet/aspnet:9.0-alpine AS runtime
+
+# Metadados
+LABEL maintainer="team@company.com"
+
+# Dependências de sistema (apenas o necessário)
+RUN apk add --no-cache \
+    ca-certificates \
+    tzdata \
+    curl \
+    && update-ca-certificates
+
+# ── Segurança: usuário non-root ───────────────────────────────
+RUN addgroup -g 1000 appgroup \
+    && adduser  -u 1000 -G appgroup -s /bin/sh -D appuser
+
+WORKDIR /app
+RUN chown -R appuser:appgroup /app
+
+# Copia binários com ownership do appuser
+COPY --from=build --chown=appuser:appgroup /app/publish .
+
+# Troca para usuário não-root
+USER appuser
+
+# Porta de exposição
+EXPOSE 8080
+
+# Variáveis de ambiente padrão
+ENV ASPNETCORE_URLS=http://+:8080
+ENV ASPNETCORE_ENVIRONMENT=Production
+ENV DOTNET_RUNNING_IN_CONTAINER=true
+ENV TZ=America/Sao_Paulo
+
+# Health check integrado ao contêiner
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:8080/health/live || exit 1
+
+ENTRYPOINT ["dotnet", "Api.dll"]
+```
+
+### 3. docker-compose.yml — Orquestração completa
+
+```yaml
+# docker-compose.yml
+
+services:
+  # ─── Aplicação ──────────────────────────────────────────────
+  api:
+    image: company/api:${TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: company-api
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT:-Production}
+      - ConnectionStrings__DefaultConnection=${DB_CONNECTION}
+      - ApplicationName=Company.Api
+      - Jaeger__AgentHost=jaeger
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    networks:
+      - app-network
+    volumes:
+      - app-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ─── Banco de Dados ─────────────────────────────────────────
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: company-db
+    restart: unless-stopped
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=${DB_SA_PASSWORD:-StrongP@ssw0rd!}
+      - MSSQL_PID=Developer
+    ports:
+      - "1433:1433"
+    networks:
+      - app-network
+    volumes:
+      - db-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD", "/opt/mssql-tools18/bin/sqlcmd",
+             "-S", "localhost", "-U", "sa",
+             "-P", "${DB_SA_PASSWORD:-StrongP@ssw0rd!}",
+             "-Q", "SELECT 1",
+             "-No", "-C"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ─── Observabilidade ────────────────────────────────────────
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: company-jaeger
+    restart: unless-stopped
+    ports:
+      - "16686:16686"   # UI
+      - "6831:6831/udp" # Agent UDP
+      - "14268:14268"   # Collector HTTP
+    networks:
+      - app-network
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+
+networks:
+  app-network:
+    driver: bridge
+    name: company-network
+
+volumes:
+  db-data:
+    name: company-db-data
+  app-logs:
+    name: company-api-logs
+```
+
+### 4. docker-compose.override.yml — Desenvolvimento local
+
+```yaml
+# docker-compose.override.yml (desenvolvimento)
+
+services:
+  api:
+    build:
+      target: build           # Build completo com SDK para hot reload
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:8080
+    volumes:
+      - ./src:/src             # Hot reload do código-fonte
+      - ~/.aspnet/https:/root/.aspnet/https:ro
+    ports:
+      - "5000:8080"            # Porta diferente em dev
+
+  db:
+    ports:
+      - "1433:1433"            # Expor porta para Azure Data Studio / SSMS
+```
+
+### 5. .env.example — Template de variáveis
+
+```dotenv
+# .env.example — copie para .env e preencha os valores reais
+# NUNCA commite o arquivo .env preenchido
+
+TAG=latest
+ENVIRONMENT=Development
+
+# Database
+DB_SA_PASSWORD=StrongP@ssw0rd!
+DB_CONNECTION=Server=db;Database=CompanyDb;User Id=sa;Password=StrongP@ssw0rd!;TrustServerCertificate=True
+
+# Observabilidade
+JAEGER_HOST=localhost
+```
+
+---
+
+## Comandos Essenciais
+
+```bash
+# Build da imagem
+docker build -t company/api:1.0.0 .
+
+# Subir stack completa
+docker compose up -d
+
+# Subir apenas a API (depende das dependências já rodarem)
+docker compose up api
+
+# Ver logs com follow
+docker compose logs -f api
+
+# Executar migration dentro do container
+docker compose exec api dotnet ef database update
+
+# Entrar no container para debug
+docker compose exec api sh
+
+# Parar e remover tudo
+docker compose down -v
+
+# Build sem cache (limpar tudo)
+docker compose build --no-cache
+```
+
+---
+
+## Exemplos por Cenário
+
+### Cenário 1 — Console / Batch App
+
+```dockerfile
+FROM mcr.microsoft.com/dotnet/sdk:9.0-alpine AS build
+WORKDIR /src
+COPY ["src/App/App.csproj", "src/App/"]
+RUN dotnet restore
+COPY . .
+RUN dotnet publish "src/App/App.csproj" -c Release -o /app/publish --no-restore
+
+FROM mcr.microsoft.com/dotnet/runtime:9.0-alpine AS runtime
+RUN addgroup -g 1000 appgroup \
+    && adduser -u 1000 -G appgroup -D appuser
+WORKDIR /app
+COPY --from=build --chown=appuser:appgroup /app/publish .
+USER appuser
+ENTRYPOINT ["dotnet", "App.dll"]
+```
+
+### Cenário 2 — Microsserviço com Dapr Sidecar
+
+```yaml
+services:
+  orders-api:
+    image: company/orders-api:latest
+    networks: [app-network]
+
+  orders-dapr:
+    image: daprio/daprd:latest
+    command:
+      - "./daprd"
+      - "-app-id"
+      - "orders-api"
+      - "-app-port"
+      - "8080"
+      - "-components-path"
+      - "/dapr/components"
+    volumes:
+      - ./dapr/components:/dapr/components
+    network_mode: "service:orders-api"  # Sidecar no mesmo namespace de rede
+```
+
+---
+
+## Checklist de Qualidade
+
+- [ ] **Multi-stage build** com stages nomeados: `restore`, `build`, `runtime`
+- [ ] **Non-root user** criado com UID/GID 1000 — `USER appuser` no stage runtime
+- [ ] `.dockerignore` excluindo `bin/`, `obj/`, `git`, `logs`
+- [ ] `COPY` dos `.csproj` separado do `COPY .` para melhor cache
+- [ ] `HEALTHCHECK` instruction no Dockerfile
+- [ ] `depends_on` com `condition: service_healthy` no compose
+- [ ] Variáveis sensíveis via `.env` ou secrets — **nunca hardcoded**
+- [ ] Redes nomeadas e volumes declarados explicitamente
+- [ ] Base image: `mcr.microsoft.com/dotnet/aspnet:9.0-alpine` (menor superfície)
+
+## Rules Relacionadas
+
+- `@docker-containers` — regra base desta skill
+- `@observability` — health checks integrados

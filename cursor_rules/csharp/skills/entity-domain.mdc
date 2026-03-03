@@ -1,0 +1,248 @@
+# Skill: Domain Entity com FluentValidation
+
+## Visão Geral
+
+> **Quando invocar:** usuário pede para criar entidade, model de domínio, aggregate root ou classe de negócio com estado mutável.
+
+---
+
+## Estrutura de Arquivos
+
+```
+Domain/
+├── Entities/
+│   └── Product.cs           ← entidade + validator no mesmo arquivo
+├── ValueObjects/
+│   └── Money.cs
+└── Abstractions/
+    └── EntityBase.cs
+```
+
+---
+
+## Passo a Passo
+
+### 1. Criar a EntityBase (uma vez por projeto)
+
+```csharp
+// Domain/Abstractions/EntityBase.cs
+namespace Company.Product.Domain.Abstractions;
+
+public abstract class EntityBase
+{
+    public Guid Id { get; protected set; }
+    public DateTime CreatedAt { get; protected set; }
+    public DateTime? UpdatedAt { get; protected set; }
+
+    protected EntityBase() { }
+
+    protected EntityBase(Guid id)
+    {
+        Id = id == Guid.Empty ? Guid.NewGuid() : id;
+        CreatedAt = DateTime.UtcNow;
+    }
+}
+```
+
+### 2. Criar a Entidade com Validação Embutida
+
+```csharp
+// Domain/Entities/Product.cs
+namespace Company.Product.Domain.Entities;
+
+public class Product : EntityBase
+{
+    #region Properties
+    public string Name { get; private set; } = string.Empty;
+    public string Description { get; private set; } = string.Empty;
+    public decimal Price { get; private set; }
+    public int StockQuantity { get; private set; }
+    public bool IsActive { get; private set; }
+    #endregion
+
+    #region Constructors
+    private Product() { } // EF Core hydration
+
+    public Product(Guid id, string name, string description, decimal price, int stockQuantity)
+        : base(id)
+    {
+        Name = name;
+        Description = description;
+        Price = price;
+        StockQuantity = stockQuantity;
+        IsActive = true;
+        new ProductValidator().ValidateAndThrow(this);
+    }
+    #endregion
+
+    #region Public Methods
+    public void UpdatePrice(decimal newPrice)
+    {
+        Price = newPrice;
+        UpdatedAt = DateTime.UtcNow;
+        new ProductValidator().ValidateAndThrow(this);
+    }
+
+    public void UpdateStock(int quantity)
+    {
+        StockQuantity = quantity;
+        UpdatedAt = DateTime.UtcNow;
+        new ProductValidator().ValidateAndThrow(this);
+    }
+
+    public void Activate()
+    {
+        IsActive = true;
+        UpdatedAt = DateTime.UtcNow;
+    }
+
+    public void Deactivate()
+    {
+        IsActive = false;
+        UpdatedAt = DateTime.UtcNow;
+    }
+    #endregion
+}
+
+#region Validators
+public class ProductValidator : AbstractValidator<Product>
+{
+    public ProductValidator()
+    {
+        RuleFor(x => x.Name)
+            .NotEmpty().WithMessage("Product name is required")
+            .MaximumLength(200).WithMessage("Product name must not exceed 200 characters");
+
+        RuleFor(x => x.Description)
+            .MaximumLength(1000).WithMessage("Description must not exceed 1000 characters");
+
+        RuleFor(x => x.Price)
+            .GreaterThan(0).WithMessage("Price must be greater than zero");
+
+        RuleFor(x => x.StockQuantity)
+            .GreaterThanOrEqualTo(0).WithMessage("Stock quantity cannot be negative");
+    }
+}
+#endregion
+```
+
+### 3. Entidade com Value Object
+
+```csharp
+// Domain/ValueObjects/Money.cs
+namespace Company.Product.Domain.ValueObjects;
+
+public record Money
+{
+    public decimal Amount { get; init; }
+    public string Currency { get; init; }
+
+    private Money() { Amount = 0; Currency = "BRL"; }
+
+    public Money(decimal amount, string currency = "BRL")
+    {
+        if (amount < 0)
+            throw new ArgumentException("Amount cannot be negative", nameof(amount));
+        if (string.IsNullOrWhiteSpace(currency))
+            throw new ArgumentException("Currency is required", nameof(currency));
+
+        Amount = amount;
+        Currency = currency.ToUpper();
+    }
+
+    public Money Add(Money other)
+    {
+        if (Currency != other.Currency)
+            throw new InvalidOperationException("Cannot add money with different currencies");
+        return new Money(Amount + other.Amount, Currency);
+    }
+
+    public override string ToString() => $"{Amount:F2} {Currency}";
+}
+```
+
+---
+
+## Exemplos de Uso
+
+### Cenário 1 — Entidade simples (CRUD)
+
+```csharp
+// Criação — valida no construtor
+var product = new Product(
+    Guid.NewGuid(),
+    "Notebook Dell",
+    "Notebook para desenvolvimento",
+    price: 4_500.00m,
+    stockQuantity: 10
+);
+
+// Mutação — revalida após alterar estado
+product.UpdatePrice(4_200.00m);
+product.UpdateStock(8);
+product.Deactivate();
+```
+
+### Cenário 2 — Entidade com domain events
+
+```csharp
+public class Order : EntityBase
+{
+    private readonly List<IDomainEvent> _domainEvents = [];
+    public IReadOnlyList<IDomainEvent> DomainEvents => _domainEvents.AsReadOnly();
+
+    #region Properties
+    public Guid CustomerId { get; private set; }
+    public OrderStatus Status { get; private set; }
+    public decimal TotalAmount { get; private set; }
+    #endregion
+
+    private Order() { }
+
+    public Order(Guid id, Guid customerId, decimal totalAmount) : base(id)
+    {
+        CustomerId = customerId;
+        TotalAmount = totalAmount;
+        Status = OrderStatus.Pending;
+        new OrderValidator().ValidateAndThrow(this);
+        _domainEvents.Add(new OrderCreatedEvent(id, customerId));
+    }
+
+    public void Complete()
+    {
+        Status = OrderStatus.Completed;
+        UpdatedAt = DateTime.UtcNow;
+        _domainEvents.Add(new OrderCompletedEvent(Id, CustomerId));
+    }
+
+    public void ClearDomainEvents() => _domainEvents.Clear();
+}
+```
+
+---
+
+## Checklist de Qualidade
+
+- [ ] Herda de `EntityBase` (ou define `Id`, `CreatedAt`, `UpdatedAt` manualmente)
+- [ ] Construtor privado sem parâmetros (para EF Core / Dapper hydration)
+- [ ] Construtor público invoca `new {Entity}Validator().ValidateAndThrow(this)` ao final
+- [ ] **Todas** as propriedades com `private set`
+- [ ] Cada método público que altera estado chama revalidação + atualiza `UpdatedAt`
+- [ ] `ProductValidator : AbstractValidator<Product>` no mesmo arquivo, dentro de `#region Validators`
+- [ ] Uso de `#region Properties`, `#region Constructors`, `#region Public Methods`
+- [ ] `Guid.NewGuid()` gerado automaticamente quando `id == Guid.Empty`
+
+---
+
+## Dependências NuGet
+
+```xml
+<PackageReference Include="FluentValidation" Version="11.*" />
+```
+
+## Rules Relacionadas
+
+- `@entity-validator` — regra base desta skill
+- `@csharp-style-guide` — convenções de nomenclatura
+- `@efcore-repository` — persistência com EF Core
+- `@dapper-repository` — persistência com Dapper

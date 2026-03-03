@@ -1,0 +1,391 @@
+# Skill: Testes Unitários com xUnit, Moq e Bogus
+
+## Visão Geral
+
+> **Quando invocar:** usuário pede testes unitários, testes de handlers, validadores, entidades, cobertura ou qualquer verificação automatizada de código.
+
+---
+
+## Estrutura de Arquivos
+
+```
+tests/
+└── Unit/
+    ├── Application/
+    │   ├── Commands/
+    │   │   └── CreateUserCommandHandlerTests.cs
+    │   └── Queries/
+    │       └── GetUserByIdQueryHandlerTests.cs
+    ├── Domain/
+    │   └── Entities/
+    │       └── UserTests.cs
+    ├── Validators/
+    │   └── CreateUserCommandValidatorTests.cs
+    ├── Builders/
+    │   ├── UserBuilder.cs          ← Builder pattern para dados de teste
+    │   └── CreateUserCommandBuilder.cs
+    └── Fixtures/
+        └── UserFixture.cs
+```
+
+---
+
+## Passo a Passo
+
+### 1. Configuração do Projeto de Testes
+
+```xml
+<!-- tests/Unit/Unit.Tests.csproj -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit"                         Version="2.*" />
+    <PackageReference Include="xunit.runner.visualstudio"     Version="2.*" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk"        Version="17.*" />
+    <PackageReference Include="Moq"                            Version="4.*" />
+    <PackageReference Include="Bogus"                          Version="35.*" />
+    <PackageReference Include="FluentAssertions"               Version="6.*" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Referenciar projetos a testar -->
+    <ProjectReference Include="..\..\src\Application\Application.csproj" />
+    <ProjectReference Include="..\..\src\Domain\Domain.csproj" />
+  </ItemGroup>
+</Project>
+```
+
+### 2. Builder Pattern — gerar dados de teste consistentes
+
+```csharp
+// tests/Unit/Builders/UserBuilder.cs
+namespace Company.Product.Unit.Tests.Builders;
+
+public class UserBuilder
+{
+    private static readonly Faker Faker = new("pt_BR");
+
+    private Guid   _id          = Guid.NewGuid();
+    private string _firstName   = Faker.Name.FirstName();
+    private string _lastName    = Faker.Name.LastName();
+    private string _email       = Faker.Internet.Email();
+    private DateTime _dob       = Faker.Date.Past(40, DateTime.UtcNow.AddYears(-18));
+
+    public UserBuilder WithId(Guid id)           { _id = id;             return this; }
+    public UserBuilder WithFirstName(string name) { _firstName = name;   return this; }
+    public UserBuilder WithLastName(string name)  { _lastName = name;    return this; }
+    public UserBuilder WithEmail(string email)    { _email = email;      return this; }
+
+    public User Build() =>
+        new(_id, _firstName, _lastName, _email, _dob);
+
+    // Atalho para criar N usuários
+    public static List<User> BuildList(int count = 5) =>
+        Enumerable.Range(0, count)
+            .Select(_ => new UserBuilder().Build())
+            .ToList();
+}
+
+// tests/Unit/Builders/CreateUserCommandBuilder.cs
+public class CreateUserCommandBuilder
+{
+    private static readonly Faker Faker = new("pt_BR");
+
+    private string _firstName = Faker.Name.FirstName();
+    private string _lastName  = Faker.Name.LastName();
+    private string _email     = Faker.Internet.Email();
+    private DateTime _dob     = Faker.Date.Past(30, DateTime.UtcNow.AddYears(-18));
+
+    public CreateUserCommandBuilder WithEmail(string email) { _email = email; return this; }
+    public CreateUserCommandBuilder WithFirstName(string n) { _firstName = n; return this; }
+
+    public CreateUserCommand Build() => new()
+    {
+        FirstName   = _firstName,
+        LastName    = _lastName,
+        Email       = _email,
+        DateOfBirth = _dob
+    };
+}
+```
+
+### 3. Testando Handlers (Use Cases)
+
+```csharp
+// tests/Unit/Application/Commands/CreateUserCommandHandlerTests.cs
+namespace Company.Product.Unit.Tests.Application.Commands;
+
+public class CreateUserCommandHandlerTests
+{
+    // ── Fixtures ─────────────────────────────────────────────
+    private readonly Mock<IUserRepository> _userRepositoryMock;
+    private readonly Mock<IUnitOfWork>     _unitOfWorkMock;
+    private readonly Mock<IMapper>         _mapperMock;
+    private readonly ILogger<CreateUserCommandHandler> _logger;
+    private readonly CreateUserCommandHandler _handler;
+
+    public CreateUserCommandHandlerTests()
+    {
+        _userRepositoryMock = new Mock<IUserRepository>();
+        _unitOfWorkMock     = new Mock<IUnitOfWork>();
+        _mapperMock         = new Mock<IMapper>();
+        _logger             = new NullLogger<CreateUserCommandHandler>();
+
+        _handler = new CreateUserCommandHandler(
+            _userRepositoryMock.Object,
+            _unitOfWorkMock.Object,
+            _mapperMock.Object,
+            _logger);
+    }
+
+    // ── Cenário: e-mail disponível → deve criar usuário ──────
+    [Fact]
+    public async Task Handle_UniqueEmail_CreatesUserAndReturnsSuccess()
+    {
+        // Arrange
+        var command  = new CreateUserCommandBuilder().Build();
+        var user     = new UserBuilder()
+            .WithEmail(command.Email)
+            .WithFirstName(command.FirstName)
+            .Build();
+        var expected = new UserResponse { Id = user.Id, Email = user.Email };
+
+        _userRepositoryMock
+            .Setup(r => r.ExistsAsync(It.IsAny<Expression<Func<User, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        _mapperMock
+            .Setup(m => m.Map<UserResponse>(It.IsAny<User>()))
+            .Returns(expected);
+
+        // Act
+        var result = await _handler.Handle(command, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Email.Should().Be(expected.Email);
+
+        _userRepositoryMock.Verify(
+            r => r.AddAsync(It.IsAny<User>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+        _unitOfWorkMock.Verify(
+            u => u.SaveChangesAsync(It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    // ── Cenário: e-mail duplicado → deve retornar Conflict ───
+    [Fact]
+    public async Task Handle_DuplicateEmail_ReturnsConflictFailure()
+    {
+        // Arrange
+        var command = new CreateUserCommandBuilder().Build();
+
+        _userRepositoryMock
+            .Setup(r => r.ExistsAsync(It.IsAny<Expression<Func<User, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var result = await _handler.Handle(command, CancellationToken.None);
+
+        // Assert
+        result.IsFailure.Should().BeTrue();
+        result.Error.Type.Should().Be(ErrorType.Conflict);
+
+        _userRepositoryMock.Verify(
+            r => r.AddAsync(It.IsAny<User>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+}
+```
+
+### 4. Testando Entidades de Domínio
+
+```csharp
+// tests/Unit/Domain/Entities/UserTests.cs
+namespace Company.Product.Unit.Tests.Domain.Entities;
+
+public class UserTests
+{
+    [Fact]
+    public void Constructor_ValidData_CreatesUserWithCorrectProperties()
+    {
+        // Arrange
+        var id         = Guid.NewGuid();
+        var firstName  = "João";
+        var lastName   = "Silva";
+        var email      = "joao@email.com";
+        var dob        = DateTime.UtcNow.AddYears(-30);
+
+        // Act
+        var user = new User(id, firstName, lastName, email, dob);
+
+        // Assert
+        user.Id.Should().Be(id);
+        user.FirstName.Should().Be(firstName);
+        user.Email.Should().Be(email);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    [InlineData(null)]
+    public void Constructor_EmptyFirstName_ThrowsValidationException(string firstName)
+    {
+        // Act
+        var act = () => new User(Guid.NewGuid(), firstName, "Silva", "joao@email.com",
+            DateTime.UtcNow.AddYears(-20));
+
+        // Assert
+        act.Should().Throw<ValidationException>()
+            .Which.Errors.Should().ContainSingle(e => e.PropertyName == "FirstName");
+    }
+
+    [Fact]
+    public void Constructor_EmptyId_GeneratesNewGuid()
+    {
+        var user = new User(Guid.Empty, "João", "Silva", "j@e.com",
+            DateTime.UtcNow.AddYears(-20));
+
+        user.Id.Should().NotBeEmpty();
+    }
+}
+```
+
+### 5. Testando Validadores
+
+```csharp
+// tests/Unit/Validators/CreateUserCommandValidatorTests.cs
+namespace Company.Product.Unit.Tests.Validators;
+
+public class CreateUserCommandValidatorTests
+{
+    private readonly CreateUserCommandValidator _validator = new();
+
+    [Fact]
+    public void Validate_ValidCommand_PassesValidation()
+    {
+        var command = new CreateUserCommandBuilder().Build();
+
+        var result = _validator.Validate(command);
+
+        result.IsValid.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void Validate_EmptyEmail_FailsWithEmailRequiredError(string email)
+    {
+        var command = new CreateUserCommandBuilder().WithEmail(email).Build();
+
+        var result = _validator.Validate(command);
+
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e =>
+            e.PropertyName == "Email" && e.ErrorMessage.Contains("required"));
+    }
+
+    [Fact]
+    public void Validate_InvalidEmailFormat_FailsWithFormatError()
+    {
+        var command = new CreateUserCommandBuilder().WithEmail("not-an-email").Build();
+
+        var result = _validator.Validate(command);
+
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.PropertyName == "Email");
+    }
+}
+```
+
+### 6. Theory com MemberData — múltiplos cenários
+
+```csharp
+public class ProductPricingTests
+{
+    public static IEnumerable<object[]> DiscountScenarios()
+    {
+        yield return new object[] { 100.00m, 0.10m, 90.00m };  // 10% desconto
+        yield return new object[] { 200.00m, 0.20m, 160.00m }; // 20% desconto
+        yield return new object[] { 50.00m,  0.00m, 50.00m };  // sem desconto
+    }
+
+    [Theory]
+    [MemberData(nameof(DiscountScenarios))]
+    public void ApplyDiscount_VariousPercentages_ReturnsCorrectPrice(
+        decimal originalPrice,
+        decimal discountRate,
+        decimal expectedPrice)
+    {
+        // Arrange
+        var product = new ProductBuilder().WithPrice(originalPrice).Build();
+
+        // Act
+        product.ApplyDiscount(discountRate);
+
+        // Assert
+        product.Price.Should().Be(expectedPrice);
+    }
+}
+```
+
+---
+
+## Padrões FluentAssertions mais usados
+
+```csharp
+// Primitivos
+result.Should().Be(42);
+result.Should().NotBeNull();
+result.Should().BeTrue();
+value.Should().BeGreaterThan(0);
+text.Should().StartWith("ABC").And.HaveLength(10);
+
+// Coleções
+list.Should().HaveCount(3);
+list.Should().Contain(item => item.Id == expectedId);
+list.Should().BeEquivalentTo(expected, opts => opts.ExcludingMissingMembers());
+list.Should().BeInAscendingOrder(x => x.Name);
+
+// Exceções
+act.Should().Throw<ValidationException>()
+   .Which.Errors.Should().HaveCount(2);
+act.Should().NotThrow();
+
+// Result Pattern
+result.IsSuccess.Should().BeTrue();
+result.IsFailure.Should().BeTrue();
+result.Error.Type.Should().Be(ErrorType.NotFound);
+result.Value.Should().BeEquivalentTo(expected);
+
+// Mocks
+mockRepo.Verify(r => r.AddAsync(It.IsAny<User>(), It.IsAny<CancellationToken>()), Times.Once);
+mockRepo.Verify(r => r.DeleteAsync(It.IsAny<User>(), It.IsAny<CancellationToken>()), Times.Never);
+```
+
+---
+
+## Checklist de Qualidade
+
+- [ ] Nomenclatura: `MethodName_Scenario_ExpectedBehavior` ou `Should_Expected_When_Scenario`
+- [ ] Estrutura **AAA** com separação visual (`// Arrange`, `// Act`, `// Assert`)
+- [ ] **Builder Pattern** para todos os objetos de domínio complexos
+- [ ] **Bogus** para dados fake realistas — nunca strings hardcoded como `"test@test.com"`
+- [ ] **NullLogger<T>** para injetar `ILogger` em testes sem ruído
+- [ ] `[Theory]` + `[InlineData]` para múltiplos cenários do mesmo comportamento
+- [ ] `Verify(Times.Once)` e `Verify(Times.Never)` para confirmar side effects
+- [ ] Sem lógica de negócio no teste — apenas o suficiente para o cenário
+- [ ] Um `[Fact]` verifica **um único comportamento**
+
+## Rules Relacionadas
+
+- `@unit-testing` — regra base desta skill
+- `@use-cases` — handlers que serão testados
+- `@entity-validator` — entidades de domínio testadas
+- `@fluentvalidation` — validadores que serão testados

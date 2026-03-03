@@ -1,0 +1,316 @@
+# Skill: Repositório Genérico com Dapper
+
+## Visão Geral
+
+> **Quando invocar:** usuário menciona Dapper, acesso direto a SQL, micro-ORM ou projeto com modelo simples.  
+> **⚠️ Modelo rico** (relacionamentos, migrations, Domain Events) → use `repository-efcore`.
+
+---
+
+## Estrutura de Arquivos
+
+```
+Infrastructure/
+├── Data/
+│   ├── DapperRepository.cs       ← repositório genérico
+│   ├── DapperConnectionFactory.cs
+│   └── Repositories/
+│       └── ProductRepository.cs  ← repositório específico (opcional)
+Application/
+└── Common/
+    ├── IDapperRepository.cs      ← interface genérica
+    └── PagedResult.cs            ← mesmo DTO do EF Core
+```
+
+---
+
+## Passo a Passo
+
+### 1. Interface (Application Layer)
+
+```csharp
+// Application/Common/IDapperRepository.cs
+namespace Company.Product.Application.Common;
+
+public interface IDapperRepository<TClass, TType>
+    where TClass : class
+{
+    Task<TClass?> GetByIdAsync(TType id, CancellationToken ct = default);
+
+    Task<IEnumerable<TClass>> ListAsync(
+        string? whereClause,
+        object? parameters = null,
+        CancellationToken ct = default);
+
+    Task<PagedResult<TClass>> PagedAsync(
+        string? whereClause,
+        object? parameters,
+        int page,
+        int pageSize,
+        CancellationToken ct = default);
+
+    Task AddAsync(TClass entity, CancellationToken ct = default);
+
+    Task UpdateAsync(TClass entity, CancellationToken ct = default);
+
+    Task DeleteAsync(TType id, CancellationToken ct = default);
+}
+
+// Application/Common/PagedResult.cs
+// ⚠️ Definido em repository-efcore — não duplicar no projeto
+```
+
+### 2. Implementação Genérica (Infrastructure Layer)
+
+```csharp
+// Infrastructure/Data/DapperRepository.cs
+namespace Company.Product.Infrastructure.Data;
+
+public class DapperRepository<TClass, TType> : IDapperRepository<TClass, TType>
+    where TClass : class
+{
+    private readonly IDbConnection _connection;
+    private readonly string _tableName;
+
+    public DapperRepository(IDbConnection connection, string tableName)
+    {
+        _connection = connection;
+        _tableName  = tableName;
+    }
+
+    public Task<TClass?> GetByIdAsync(TType id, CancellationToken ct = default)
+        => _connection.QuerySingleOrDefaultAsync<TClass>(
+            $"SELECT * FROM {_tableName} WHERE Id = @Id",
+            new { Id = id });
+
+    public Task<IEnumerable<TClass>> ListAsync(
+        string? whereClause,
+        object? parameters = null,
+        CancellationToken ct = default)
+    {
+        var sql = $"SELECT * FROM {_tableName}";
+        if (!string.IsNullOrWhiteSpace(whereClause))
+            sql += $" WHERE {whereClause}";
+
+        return _connection.QueryAsync<TClass>(sql, parameters);
+    }
+
+    public async Task<PagedResult<TClass>> PagedAsync(
+        string? whereClause,
+        object? parameters,
+        int page,
+        int pageSize,
+        CancellationToken ct = default)
+    {
+        var sqlWhere = string.IsNullOrWhiteSpace(whereClause)
+            ? string.Empty
+            : $"WHERE {whereClause}";
+
+        var sqlCount = $"SELECT COUNT(1) FROM {_tableName} {sqlWhere}";
+        var sqlData  = $"""
+            SELECT * FROM {_tableName} {sqlWhere}
+            ORDER BY Id
+            OFFSET @Skip ROWS FETCH NEXT @Take ROWS ONLY
+            """;
+
+        // Parâmetros de paginação mesclados com os parâmetros do filtro
+        var pagedParams = new DynamicParameters(parameters);
+        pagedParams.Add("Skip", (page - 1) * pageSize);
+        pagedParams.Add("Take", pageSize);
+
+        var total = await _connection.ExecuteScalarAsync<int>(sqlCount, parameters);
+        var items = await _connection.QueryAsync<TClass>(sqlData, pagedParams);
+
+        return new PagedResult<TClass>(items.ToList(), total, page, pageSize);
+    }
+
+    public Task AddAsync(TClass entity, CancellationToken ct = default)
+        => _connection.ExecuteAsync(InsertSql, entity);
+
+    public Task UpdateAsync(TClass entity, CancellationToken ct = default)
+        => _connection.ExecuteAsync(UpdateSql, entity);
+
+    public Task DeleteAsync(TType id, CancellationToken ct = default)
+        => _connection.ExecuteAsync(
+            $"DELETE FROM {_tableName} WHERE Id = @Id",
+            new { Id = id });
+
+    // ⚠️ Repositório concreto DEVE sobrescrever com as colunas reais da tabela
+    protected virtual string InsertSql =>
+        throw new NotImplementedException($"InsertSql not implemented for {_tableName}");
+
+    protected virtual string UpdateSql =>
+        throw new NotImplementedException($"UpdateSql not implemented for {_tableName}");
+}
+```
+
+### 3. Repositório Específico (quando SQL customizado é necessário)
+
+```csharp
+// Application/Interfaces/IProductRepository.cs
+public interface IProductRepository : IDapperRepository<Product, Guid>
+{
+    Task<IEnumerable<Product>> GetActiveByPriceRangeAsync(
+        decimal minPrice, decimal maxPrice, CancellationToken ct = default);
+}
+
+// Infrastructure/Data/Repositories/ProductRepository.cs
+public class ProductRepository
+    : DapperRepository<Product, Guid>, IProductRepository
+{
+    private readonly IDbConnection _connection;
+
+    public ProductRepository(IDbConnection connection)
+        : base(connection, "Products") => _connection = connection;
+
+    // ✅ Implementar as colunas reais da tabela
+    protected override string InsertSql =>
+        "INSERT INTO Products (Id, Name, Price, IsActive) VALUES (@Id, @Name, @Price, @IsActive)";
+
+    protected override string UpdateSql =>
+        "UPDATE Products SET Name = @Name, Price = @Price, IsActive = @IsActive WHERE Id = @Id";
+
+    public Task<IEnumerable<Product>> GetActiveByPriceRangeAsync(
+        decimal minPrice, decimal maxPrice, CancellationToken ct = default)
+        => _connection.QueryAsync<Product>(
+            """
+            SELECT * FROM Products
+            WHERE IsActive = 1 AND Price BETWEEN @MinPrice AND @MaxPrice
+            ORDER BY Price
+            """,
+            new { MinPrice = minPrice, MaxPrice = maxPrice });
+}
+```
+
+### 4. Conexão e Registro em DI
+
+```csharp
+// Infrastructure/DependencyInjection.cs
+public static class InfrastructureServiceExtensions
+{
+    public static IServiceCollection AddInfrastructureDapper(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        // Registrar IDbConnection como Scoped (uma por request)
+        services.AddScoped<IDbConnection>(_ =>
+            new SqlConnection(
+                configuration.GetConnectionString("DefaultConnection")));
+
+        // Repositório genérico (quando não há repositório específico)
+        // Registrar manualmente por tabela:
+        services.AddScoped<IDapperRepository<Product, Guid>>(sp =>
+            new DapperRepository<Product, Guid>(
+                sp.GetRequiredService<IDbConnection>(), "Products"));
+
+        // Repositório específico
+        services.AddScoped<IProductRepository, ProductRepository>();
+
+        return services;
+    }
+}
+```
+
+---
+
+## Exemplos de Uso
+
+### Cenário 1 — Handler de Query simples
+
+```csharp
+public class GetProductsQueryHandler
+    : IRequestHandler<GetProductsQuery, Result<IEnumerable<ProductDto>>>
+{
+    private readonly IDapperRepository<Product, Guid> _repository;
+
+    public GetProductsQueryHandler(IDapperRepository<Product, Guid> repository)
+        => _repository = repository;
+
+    public async Task<Result<IEnumerable<ProductDto>>> Handle(
+        GetProductsQuery request, CancellationToken ct)
+    {
+        var products = await _repository.ListAsync(
+            whereClause: "IsActive = 1",
+            parameters: null,
+            ct: ct);
+
+        return Result.Success(products.Select(ProductDto.FromDomain));
+    }
+}
+```
+
+### Cenário 2 — Query com filtro dinâmico
+
+```csharp
+public async Task<Result<IEnumerable<ProductDto>>> Handle(
+    SearchProductsQuery request, CancellationToken ct)
+{
+    var whereClause  = "Name LIKE @Search AND IsActive = @IsActive";
+    var parameters   = new { Search = $"%{request.Term}%", IsActive = true };
+
+    var products = await _repository.ListAsync(whereClause, parameters, ct);
+
+    return Result.Success(products.Select(ProductDto.FromDomain));
+}
+```
+
+### Cenário 3 — Paginação com filtro
+
+```csharp
+public async Task<Result<PagedResult<ProductDto>>> Handle(
+    GetProductsPagedQuery request, CancellationToken ct)
+{
+    var paged = await _repository.PagedAsync(
+        whereClause: "IsActive = 1",
+        parameters: null,
+        page: request.Page,
+        pageSize: request.PageSize,
+        ct: ct);
+
+    var dtos = paged.Items.Select(ProductDto.FromDomain).ToList();
+    return Result.Success(
+        new PagedResult<ProductDto>(dtos, paged.Total, paged.Page, paged.PageSize));
+}
+```
+
+---
+
+## Quando usar Dapper vs EF Core
+
+| Critério | Dapper | EF Core |
+|---|---|---|
+| Modelo de dados | Simples, poucas tabelas | Complexo, muitos relacionamentos |
+| Performance SQL crítica | ✅ Preferível | Aceitável |
+| Migrations | ❌ Manual | ✅ Automático |
+| Tracking de mudanças | ❌ Não | ✅ Sim |
+| Lazy loading | ❌ Não | ✅ Sim |
+| Domain Events | ❌ Não integrado | ✅ Via interceptors |
+| Legacy database | ✅ Excelente | Pode ser complexo |
+| Consultas analíticas | ✅ SQL livre | Pode ser verbose |
+
+---
+
+## Checklist de Qualidade
+
+- [ ] Interface `IDapperRepository<TClass, TType>` no **Application layer**
+- [ ] `DapperRepository` no **Infrastructure layer**
+- [ ] `IDbConnection` registrado como **Scoped** (não Singleton)
+- [ ] SQL com **parâmetros nomeados** (`@Id`, `@Name`) — nunca concatenação de string
+- [ ] `PagedResult<T>` **compartilhado** com o EF Core repository (mesmo tipo)
+- [ ] INSERTs e UPDATEs com colunas **explícitas** — nunca `SELECT *` em writes
+- [ ] Justificativa documentada no README de por que Dapper foi escolhido
+
+---
+
+## Dependências NuGet
+
+```xml
+<PackageReference Include="Dapper"                         Version="2.*" />
+<PackageReference Include="Microsoft.Data.SqlClient"       Version="5.*" />
+```
+
+## Rules Relacionadas
+
+- `@dapper-repository` — regra base desta skill
+- `@entity-validator` — entidades que o repositório persiste
+- `@repository-efcore` — alternativa para modelos mais ricos

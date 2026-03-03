@@ -1,0 +1,345 @@
+# Skill: Repositório Genérico com EF Core
+
+## Visão Geral
+
+> **Quando invocar:** usuário pede repositório, acesso a dados com EF Core, DbContext, mapeamento de entidade ou persistência com Entity Framework Core.
+
+---
+
+## Estrutura de Arquivos
+
+```
+Infrastructure/
+├── Data/
+│   ├── AppDbContext.cs
+│   ├── Repositories/
+│   │   ├── EfRepository.cs          ← implementação genérica
+│   │   └── UserRepository.cs        ← repositório específico (opcional)
+│   └── Configurations/
+│       ├── UserConfiguration.cs
+│       └── ProductConfiguration.cs
+Application/
+└── Common/
+    ├── IRepository.cs               ← interface genérica
+    └── PagedResult.cs               ← DTO de paginação
+```
+
+---
+
+## Passo a Passo
+
+### 1. Interface e DTO de Paginação (Application Layer)
+
+```csharp
+// Application/Common/IRepository.cs
+namespace Company.Product.Application.Common;
+
+public interface IRepository<TClass, TType> where TClass : class
+{
+    Task<TClass?> GetByIdAsync(TType id, CancellationToken ct);
+    Task<IReadOnlyList<TClass>> ListAsync(
+        Expression<Func<TClass, bool>>? filter,
+        CancellationToken ct);
+    Task<PagedResult<TClass>> PagedAsync(
+        Expression<Func<TClass, bool>>? filter,
+        int page,
+        int pageSize,
+        CancellationToken ct);
+    Task AddAsync(TClass entity, CancellationToken ct);
+    Task UpdateAsync(TClass entity, CancellationToken ct);
+    Task DeleteAsync(TClass entity, CancellationToken ct);
+}
+
+// Application/Common/PagedResult.cs
+public record PagedResult<T>(
+    IReadOnlyList<T> Items,
+    int Total,
+    int Page,
+    int PageSize)
+{
+    public int TotalPages => (int)Math.Ceiling(Total / (double)PageSize);
+    public bool HasPrevious => Page > 1;
+    public bool HasNext => Page < TotalPages;
+}
+```
+
+### 2. Implementação Genérica (Infrastructure Layer)
+
+```csharp
+// Infrastructure/Data/Repositories/EfRepository.cs
+namespace Company.Product.Infrastructure.Data.Repositories;
+
+public class EfRepository<TClass, TType> : IRepository<TClass, TType>
+    where TClass : class
+{
+    private readonly AppDbContext _db;
+    private readonly DbSet<TClass> _set;
+
+    public EfRepository(AppDbContext db)
+    {
+        _db = db;
+        _set = db.Set<TClass>();
+    }
+
+    public Task<TClass?> GetByIdAsync(TType id, CancellationToken ct)
+        => _set.FindAsync([id!], ct).AsTask();
+
+    public async Task<IReadOnlyList<TClass>> ListAsync(
+        Expression<Func<TClass, bool>>? filter,
+        CancellationToken ct)
+    {
+        return filter is null
+            ? await _set.ToListAsync(ct)
+            : await _set.Where(filter).ToListAsync(ct);
+    }
+
+    public async Task<PagedResult<TClass>> PagedAsync(
+        Expression<Func<TClass, bool>>? filter,
+        int page,
+        int pageSize,
+        CancellationToken ct)
+    {
+        var query = filter is null ? _set.AsQueryable() : _set.Where(filter);
+        var total = await query.CountAsync(ct);
+        var items = await query
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(ct);
+
+        return new PagedResult<TClass>(items, total, page, pageSize);
+    }
+
+    public async Task AddAsync(TClass entity, CancellationToken ct)
+        => await _set.AddAsync(entity, ct);
+
+    public Task UpdateAsync(TClass entity, CancellationToken ct)
+    {
+        _set.Update(entity);
+        return Task.CompletedTask;
+    }
+
+    public Task DeleteAsync(TClass entity, CancellationToken ct)
+    {
+        _set.Remove(entity);
+        return Task.CompletedTask;
+    }
+}
+```
+
+### 3. DbContext com ApplyConfigurationsFromAssembly
+
+```csharp
+// Infrastructure/Data/AppDbContext.cs
+namespace Company.Product.Infrastructure.Data;
+
+public class AppDbContext : DbContext
+{
+    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+
+    public DbSet<User> Users => Set<User>();
+    public DbSet<Product> Products => Set<Product>();
+    public DbSet<Order> Orders => Set<Order>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        base.OnModelCreating(modelBuilder);
+        modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
+    }
+
+    public override Task<int> SaveChangesAsync(CancellationToken ct = default)
+    {
+        foreach (var entry in ChangeTracker.Entries<EntityBase>()
+                     .Where(e => e.State == EntityState.Modified))
+        {
+            entry.Entity.UpdatedAt = DateTime.UtcNow;
+        }
+        return base.SaveChangesAsync(ct);
+    }
+}
+```
+
+### 4. Configuração de Entidade (IEntityTypeConfiguration)
+
+```csharp
+// Infrastructure/Data/Configurations/UserConfiguration.cs
+namespace Company.Product.Infrastructure.Data.Configurations;
+
+// ✅ NUNCA declare mapeamentos inline no DbContext — sempre em arquivo separado
+public class UserConfiguration : IEntityTypeConfiguration<User>
+{
+    public void Configure(EntityTypeBuilder<User> builder)
+    {
+        builder.ToTable("Users");
+        builder.HasKey(u => u.Id);
+
+        builder.Property(u => u.FirstName)
+            .IsRequired()
+            .HasMaxLength(100);
+
+        builder.Property(u => u.LastName)
+            .IsRequired()
+            .HasMaxLength(100);
+
+        builder.Property(u => u.Email)
+            .IsRequired()
+            .HasMaxLength(255);
+
+        builder.HasIndex(u => u.Email)
+            .IsUnique();
+
+        builder.Property(u => u.CreatedAt)
+            .IsRequired();
+    }
+}
+```
+
+### 5. Repositório Específico (quando necessário)
+
+```csharp
+// Application/Interfaces/IUserRepository.cs
+public interface IUserRepository : IRepository<User, Guid>
+{
+    Task<User?> GetByEmailAsync(string email, CancellationToken ct);
+    Task<bool> ExistsAsync(Expression<Func<User, bool>> predicate, CancellationToken ct);
+}
+
+// Infrastructure/Data/Repositories/UserRepository.cs
+public class UserRepository : EfRepository<User, Guid>, IUserRepository
+{
+    private readonly AppDbContext _db;
+
+    public UserRepository(AppDbContext db) : base(db) => _db = db;
+
+    public Task<User?> GetByEmailAsync(string email, CancellationToken ct)
+        => _db.Users.FirstOrDefaultAsync(u => u.Email == email, ct);
+
+    public Task<bool> ExistsAsync(
+        Expression<Func<User, bool>> predicate,
+        CancellationToken ct)
+        => _db.Users.AnyAsync(predicate, ct);
+}
+```
+
+### 6. Registro em Dependency Injection
+
+```csharp
+// Infrastructure/DependencyInjection.cs
+public static class InfrastructureServiceExtensions
+{
+    public static IServiceCollection AddInfrastructure(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        // DbContext
+        services.AddDbContext<AppDbContext>(options =>
+            options.UseSqlServer(
+                configuration.GetConnectionString("DefaultConnection"),
+                sqlOptions => sqlOptions.MigrationsAssembly(
+                    typeof(AppDbContext).Assembly.FullName)));
+
+        // Repositório genérico (para todas as entidades sem interface específica)
+        services.AddScoped(typeof(IRepository<,>), typeof(EfRepository<,>));
+
+        // Repositórios específicos
+        services.AddScoped<IUserRepository, UserRepository>();
+
+        // Unit of Work (se aplicável)
+        services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<AppDbContext>());
+
+        return services;
+    }
+}
+```
+
+---
+
+## Exemplos de Uso
+
+### Cenário 1 — Handler usando repositório genérico
+
+```csharp
+public class GetProductsQueryHandler : IRequestHandler<GetProductsQuery, Result<PagedResult<ProductDto>>>
+{
+    private readonly IRepository<Product, Guid> _repository;
+
+    public GetProductsQueryHandler(IRepository<Product, Guid> repository)
+        => _repository = repository;
+
+    public async Task<Result<PagedResult<ProductDto>>> Handle(
+        GetProductsQuery request,
+        CancellationToken cancellationToken)
+    {
+        var paged = await _repository.PagedAsync(
+            filter: p => p.IsActive,
+            page: request.Page,
+            pageSize: request.PageSize,
+            ct: cancellationToken);
+
+        var dtos = paged.Items.Select(ProductDto.FromDomain).ToList();
+        var result = new PagedResult<ProductDto>(dtos, paged.Total, paged.Page, paged.PageSize);
+
+        return Result.Success(result);
+    }
+}
+```
+
+### Cenário 2 — Handler usando repositório específico
+
+```csharp
+public class GetUserByEmailQueryHandler
+    : IRequestHandler<GetUserByEmailQuery, Result<UserDto>>
+{
+    private readonly IUserRepository _userRepository;
+
+    public GetUserByEmailQueryHandler(IUserRepository userRepository)
+        => _userRepository = userRepository;
+
+    public async Task<Result<UserDto>> Handle(
+        GetUserByEmailQuery request,
+        CancellationToken cancellationToken)
+    {
+        var user = await _userRepository.GetByEmailAsync(request.Email, cancellationToken);
+
+        return user is null
+            ? Result.Failure<UserDto>(Error.NotFound("User.NotFound", "User not found"))
+            : Result.Success(UserDto.FromDomain(user));
+    }
+}
+```
+
+### Cenário 3 — Migration via CLI
+
+```bash
+# Adicionar migration
+dotnet ef migrations add InitialCreate --project Infrastructure --startup-project Api
+
+# Aplicar ao banco
+dotnet ef database update --project Infrastructure --startup-project Api
+```
+
+---
+
+## Checklist de Qualidade
+
+- [ ] Interface `IRepository<TClass, TType>` no **Application layer** (não em Infrastructure)
+- [ ] `EfRepository` no **Infrastructure layer**
+- [ ] `AppDbContext` com `ApplyConfigurationsFromAssembly` — **sem mapeamento inline**
+- [ ] Cada entidade com `IEntityTypeConfiguration` em arquivo **separado**
+- [ ] `PagedResult<T>` como `record` imutável compartilhado
+- [ ] Registro de `IRepository<,>` / `EfRepository<,>` como `AddScoped`
+- [ ] `SaveChangesAsync` sobrescrito para auditar `UpdatedAt`
+
+---
+
+## Dependências NuGet
+
+```xml
+<PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.*" />
+<PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.*" />
+```
+
+## Rules Relacionadas
+
+- `@efcore-repository` — regra base desta skill
+- `@entity-validator` — entidades que o repositório persiste
+- `@use-cases` — handlers que consomem o repositório

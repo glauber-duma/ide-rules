@@ -1,0 +1,344 @@
+# Skill: Configurar Stack de Observabilidade
+
+## Visão Geral
+
+> **Quando invocar:** usuário pede logging, observabilidade, Serilog, OpenTelemetry, health checks, tracing, métricas ou qualquer elemento de diagnóstico.
+
+---
+
+## Estrutura de Arquivos
+
+```
+Api/
+├── Middleware/
+│   └── CorrelationIdMiddleware.cs
+├── Extensions/
+│   └── ObservabilityExtensions.cs
+├── Program.cs
+└── appsettings.json
+```
+
+---
+
+## Setup Completo — Passo a Passo
+
+### 1. Pacotes NuGet necessários
+
+```xml
+<!-- Serilog -->
+<PackageReference Include="Serilog.AspNetCore" Version="8.*" />
+<PackageReference Include="Serilog.Formatting.Compact" Version="3.*" />
+<PackageReference Include="Serilog.Sinks.File" Version="6.*" />
+<PackageReference Include="Serilog.Enrichers.Environment" Version="3.*" />
+
+<!-- OpenTelemetry -->
+<PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.*" />
+<PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.*" />
+<PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.*" />
+<PackageReference Include="OpenTelemetry.Instrumentation.EntityFrameworkCore" Version="1.*" />
+<PackageReference Include="OpenTelemetry.Exporter.Jaeger" Version="1.*" />
+<PackageReference Include="OpenTelemetry.Exporter.Prometheus.AspNetCore" Version="1.*" />
+
+<!-- Health Checks -->
+<PackageReference Include="AspNetCore.HealthChecks.SqlServer" Version="8.*" />
+<PackageReference Include="AspNetCore.HealthChecks.UI.Client" Version="8.*" />
+```
+
+### 2. Extension Method — Observabilidade encapsulada
+
+```csharp
+// Api/Extensions/ObservabilityExtensions.cs
+namespace Company.Product.Api.Extensions;
+
+public static class ObservabilityExtensions
+{
+    public static WebApplicationBuilder AddObservability(
+        this WebApplicationBuilder builder)
+    {
+        // ── Serilog ──────────────────────────────────────────────────
+        builder.Host.UseSerilog((ctx, services, cfg) => cfg
+            .ReadFrom.Configuration(ctx.Configuration)
+            .ReadFrom.Services(services)
+            .Enrich.FromLogContext()
+            .Enrich.WithMachineName()
+            .Enrich.WithEnvironmentName()
+            .Enrich.WithProperty(
+                "Application",
+                ctx.Configuration["ApplicationName"] ?? "App")
+            .WriteTo.Console(new CompactJsonFormatter())
+            .WriteTo.File(
+                new CompactJsonFormatter(),
+                path: "logs/log-.txt",
+                rollingInterval: RollingInterval.Day,
+                retainedFileCountLimit: 7,
+                shared: true));
+
+        // ── OpenTelemetry ────────────────────────────────────────────
+        var serviceName    = builder.Configuration["ApplicationName"] ?? "App";
+        var serviceVersion = builder.Configuration["ApplicationVersion"] ?? "1.0.0";
+
+        builder.Services
+            .AddOpenTelemetry()
+            .ConfigureResource(r => r
+                .AddService(serviceName, serviceVersion: serviceVersion)
+                .AddTelemetrySdk())
+            .WithTracing(tracing => tracing
+                .AddAspNetCoreInstrumentation(opt =>
+                {
+                    opt.RecordException = true;
+                    opt.Filter = ctx =>
+                        !ctx.Request.Path.StartsWithSegments("/health");
+                })
+                .AddHttpClientInstrumentation()
+                .AddEntityFrameworkCoreInstrumentation(opt =>
+                    opt.SetDbStatementForText = true)
+                .AddJaegerExporter(opt =>
+                {
+                    opt.AgentHost = builder.Configuration["Jaeger:AgentHost"] ?? "localhost";
+                    opt.AgentPort = int.Parse(
+                        builder.Configuration["Jaeger:AgentPort"] ?? "6831");
+                }))
+            .WithMetrics(metrics => metrics
+                .AddAspNetCoreInstrumentation()
+                .AddHttpClientInstrumentation()
+                .AddRuntimeInstrumentation()
+                .AddPrometheusExporter());
+
+        return builder;
+    }
+
+    public static WebApplication UseObservability(this WebApplication app)
+    {
+        // Request logging com contexto enriquecido
+        app.UseSerilogRequestLogging(opts =>
+        {
+            opts.MessageTemplate =
+                "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000} ms";
+            opts.EnrichDiagnosticContext = (diag, http) =>
+            {
+                diag.Set("RequestHost", http.Request.Host.Value);
+                diag.Set("UserAgent",   http.Request.Headers.UserAgent.ToString());
+                diag.Set("RemoteIP",    http.Connection.RemoteIpAddress?.ToString());
+
+                if (http.Items.TryGetValue("CorrelationId", out var cid))
+                    diag.Set("CorrelationId", cid);
+
+                if (http.User.Identity?.IsAuthenticated == true)
+                {
+                    var uid = http.User.FindFirst("sub")?.Value
+                           ?? http.User.FindFirst("id")?.Value;
+                    if (uid is not null) diag.Set("UserId", uid);
+                }
+            };
+        });
+
+        // Métricas Prometheus
+        app.MapPrometheusScrapingEndpoint("/metrics");
+
+        return app;
+    }
+
+    public static IServiceCollection AddHealthChecksConfig(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddHealthChecks()
+            .AddSqlServer(
+                connectionString: configuration.GetConnectionString("DefaultConnection")!,
+                name: "database",
+                tags: ["ready"])
+            .AddUrlGroup(
+                uri: new Uri(configuration["ExternalService:Url"] ?? "http://localhost"),
+                name: "external-service",
+                tags: ["ready"]);
+
+        return services;
+    }
+}
+```
+
+### 3. CorrelationId Middleware
+
+```csharp
+// Api/Middleware/CorrelationIdMiddleware.cs
+namespace Company.Product.Api.Middleware;
+
+public class CorrelationIdMiddleware(RequestDelegate next)
+{
+    private const string CorrelationIdHeader = "X-Correlation-Id";
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        var correlationId = context.Request.Headers[CorrelationIdHeader].FirstOrDefault()
+                         ?? Activity.Current?.TraceId.ToString()
+                         ?? Guid.NewGuid().ToString("N");
+
+        context.Items["CorrelationId"] = correlationId;
+        context.Response.Headers[CorrelationIdHeader] = correlationId;
+
+        using (LogContext.PushProperty("CorrelationId", correlationId))
+        {
+            await next(context);
+        }
+    }
+}
+```
+
+### 4. appsettings.json
+
+```json
+{
+  "ApplicationName": "MyApi",
+  "ApplicationVersion": "1.0.0",
+  "Serilog": {
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft": "Warning",
+        "Microsoft.Hosting.Lifetime": "Information",
+        "Microsoft.EntityFrameworkCore": "Warning",
+        "System": "Warning"
+      }
+    },
+    "Enrich": ["FromLogContext", "WithMachineName", "WithEnvironmentName"],
+    "Properties": {
+      "Application": "MyApi"
+    }
+  },
+  "Jaeger": {
+    "AgentHost": "localhost",
+    "AgentPort": "6831"
+  }
+}
+```
+
+### 5. appsettings.Development.json
+
+```json
+{
+  "Serilog": {
+    "MinimumLevel": {
+      "Default": "Debug",
+      "Override": {
+        "Microsoft.EntityFrameworkCore.Database.Command": "Information"
+      }
+    },
+    "WriteTo": [
+      {
+        "Name": "Console",
+        "Args": {
+          "outputTemplate": "[{Timestamp:HH:mm:ss} {Level:u3}] [{CorrelationId}] {Message:lj}{NewLine}{Exception}"
+        }
+      }
+    ]
+  }
+}
+```
+
+### 6. Program.cs — orquestração completa
+
+```csharp
+// Program.cs
+var builder = WebApplication.CreateBuilder(args);
+
+// Observabilidade
+builder.AddObservability();
+
+// Health Checks
+builder.Services.AddHealthChecksConfig(builder.Configuration);
+
+// ... demais configurações ...
+builder.Services.AddApplication();
+builder.Services.AddInfrastructure(builder.Configuration);
+
+var app = builder.Build();
+
+// Middleware pipeline (ordem importa)
+app.UseMiddleware<CorrelationIdMiddleware>();  // ← primeiro
+app.UseObservability();
+
+if (app.Environment.IsDevelopment())
+    app.UseSwagger().UseSwaggerUI();
+
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+
+// Health Check endpoints
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = _ => false,  // Apenas liveness (sem dependências)
+    ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse
+});
+
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready"),
+    ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse
+});
+
+try
+{
+    Log.Information("Starting {Application}", builder.Configuration["ApplicationName"]);
+    app.Run();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Application terminated unexpectedly");
+}
+finally
+{
+    Log.CloseAndFlush();
+}
+```
+
+---
+
+## Boas Práticas de Logging
+
+### Correto vs Incorreto
+
+```csharp
+// ✅ CORRETO — message template estruturado
+_logger.LogInformation(
+    "Order {OrderId} created for customer {CustomerId} with total {Total:C}",
+    order.Id, order.CustomerId, order.Total);
+
+// ❌ ERRADO — string interpolation (perde a estrutura)
+_logger.LogInformation($"Order {order.Id} created for customer {order.CustomerId}");
+
+// ✅ CORRETO — mascarar dados sensíveis
+_logger.LogInformation("User {Email} logged in",
+    email[..3] + "***@" + email.Split('@')[1]);
+
+// ❌ ERRADO — logar dados sensíveis
+_logger.LogInformation("Password {Password} verified for {Email}", password, email);
+
+// ✅ CORRETO — nível apropriado
+_logger.LogDebug("Cache hit for key {Key}", key);
+_logger.LogInformation("Order {OrderId} completed", orderId);
+_logger.LogWarning("Retry attempt {Attempt} for service {Service}", attempt, service);
+_logger.LogError(ex, "Failed to process order {OrderId}", orderId);
+_logger.LogCritical("Database connection lost, shutting down");
+```
+
+---
+
+---
+
+## Checklist de Qualidade
+
+- [ ] `UseSerilog` configurado no `Host` com enriquecedores: `MachineName`, `EnvironmentName`, `Application`
+- [ ] Sinks: Console (JSON compacto) + File (rolling diário, 7 dias retidos)
+- [ ] `UseSerilogRequestLogging` com enriquecimento de `CorrelationId` e `UserId`
+- [ ] `CorrelationIdMiddleware` registrado **antes** de qualquer outro middleware
+- [ ] OpenTelemetry com `AddAspNetCoreInstrumentation`, `AddHttpClientInstrumentation`
+- [ ] Health checks: `/health/live` (sem dependências) + `/health/ready` (com dependências)
+- [ ] `Log.CloseAndFlush()` no bloco `finally` do `Program.cs`
+- [ ] **Nunca** logar: senhas, tokens, CPF, cartão de crédito
+
+## Rules Relacionadas
+
+- `@observability` — regra base desta skill
+- `@csharp-style-guide` — convenções de código
+- `@docker-containers` — healthcheck no Dockerfile integra com `/health/live`

@@ -1,0 +1,373 @@
+# Skill: Use Case CQRS com MediatR
+
+## Visão Geral
+
+> **Quando invocar:** usuário pede use case, command, query, handler, operação de negócio ou qualquer lógica de aplicação que manipule ou leia dados.
+
+---
+
+## Estrutura de Arquivos
+
+```
+Application/
+├── Users/
+│   ├── Commands/
+│   │   ├── CreateUser/
+│   │   │   ├── CreateUserCommand.cs        ← record + validator + handler
+│   │   ├── UpdateUser/
+│   │   │   └── UpdateUserCommand.cs
+│   │   └── DeleteUser/
+│   │       └── DeleteUserCommand.cs
+│   └── Queries/
+│       ├── GetUserById/
+│       │   └── GetUserByIdQuery.cs
+│       └── GetUsersPaged/
+│           └── GetUsersPagedQuery.cs
+├── Common/
+│   ├── Behaviors/
+│   │   ├── ValidationBehavior.cs           ← pipeline MediatR
+│   │   ├── LoggingBehavior.cs
+│   │   └── TransactionBehavior.cs
+│   └── Mappings/
+│       └── UserMappingProfile.cs
+```
+
+---
+
+## Passo a Passo
+
+### 1. Command (operação de escrita)
+
+```csharp
+// Application/Users/Commands/CreateUser/CreateUserCommand.cs
+namespace Company.Product.Application.Users.Commands.CreateUser;
+
+public record CreateUserCommand : IRequest<Result<UserResponse>>
+{
+    public string FirstName { get; init; } = string.Empty;
+    public string LastName  { get; init; } = string.Empty;
+    public string Email     { get; init; } = string.Empty;
+    public DateTime DateOfBirth { get; init; }
+}
+
+public class CreateUserCommandValidator : AbstractValidator<CreateUserCommand>
+{
+    public CreateUserCommandValidator()
+    {
+        RuleFor(x => x.FirstName)
+            .NotEmpty().WithMessage("First name is required")
+            .MaximumLength(100);
+
+        RuleFor(x => x.LastName)
+            .NotEmpty().WithMessage("Last name is required")
+            .MaximumLength(100);
+
+        RuleFor(x => x.Email)
+            .NotEmpty().WithMessage("Email is required")
+            .EmailAddress().WithMessage("Email must be valid")
+            .MaximumLength(255);
+
+        RuleFor(x => x.DateOfBirth)
+            .LessThan(DateTime.UtcNow).WithMessage("Date of birth must be in the past");
+    }
+}
+
+
+public class CreateUserCommandHandler
+    : IRequestHandler<CreateUserCommand, Result<UserResponse>>
+{
+    private readonly IUserRepository _userRepository;
+    private readonly IUnitOfWork     _unitOfWork;
+    private readonly IMapper         _mapper;
+    private readonly ILogger<CreateUserCommandHandler> _logger;
+
+    public CreateUserCommandHandler(
+        IUserRepository userRepository,
+        IUnitOfWork     unitOfWork,
+        IMapper         mapper,
+        ILogger<CreateUserCommandHandler> logger)
+    {
+        _userRepository = userRepository;
+        _unitOfWork     = unitOfWork;
+        _mapper         = mapper;
+        _logger         = logger;
+    }
+
+    public async Task<Result<UserResponse>> Handle(
+        CreateUserCommand request,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Creating user with email {Email}", request.Email);
+
+        // Regra de negócio: e-mail único
+        if (await _userRepository.ExistsAsync(u => u.Email == request.Email, cancellationToken))
+        {
+            _logger.LogWarning("Email {Email} already in use", request.Email);
+            return Result.Failure<UserResponse>(
+                Error.Conflict("User.DuplicateEmail", "Email already in use"));
+        }
+
+        var user = new User(
+            Guid.NewGuid(),
+            request.FirstName,
+            request.LastName,
+            request.Email,
+            request.DateOfBirth);
+
+        await _userRepository.AddAsync(user, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation("User {UserId} created successfully", user.Id);
+
+        return Result.Success(_mapper.Map<UserResponse>(user));
+    }
+}
+```
+
+### 2. Query (operação de leitura)
+
+```csharp
+// Application/Users/Queries/GetUserById/GetUserByIdQuery.cs
+namespace Company.Product.Application.Users.Queries.GetUserById;
+
+
+public record GetUserByIdQuery(Guid Id) : IRequest<Result<UserResponse>>;
+
+public class GetUserByIdQueryValidator : AbstractValidator<GetUserByIdQuery>
+{
+    public GetUserByIdQueryValidator()
+    {
+        RuleFor(x => x.Id)
+            .NotEmpty().WithMessage("User ID is required");
+    }
+}
+
+
+public class GetUserByIdQueryHandler
+    : IRequestHandler<GetUserByIdQuery, Result<UserResponse>>
+{
+    private readonly IUserRepository _userRepository;
+    private readonly IMapper _mapper;
+
+    public GetUserByIdQueryHandler(IUserRepository userRepository, IMapper mapper)
+    {
+        _userRepository = userRepository;
+        _mapper         = mapper;
+    }
+
+    public async Task<Result<UserResponse>> Handle(
+        GetUserByIdQuery request,
+        CancellationToken cancellationToken)
+    {
+        var user = await _userRepository.GetByIdAsync(request.Id, cancellationToken);
+
+        return user is null
+            ? Result.Failure<UserResponse>(
+                Error.NotFound("User.NotFound", $"User {request.Id} not found"))
+            : Result.Success(_mapper.Map<UserResponse>(user));
+    }
+}
+```
+
+### 3. Query Paginada
+
+```csharp
+// Application/Users/Queries/GetUsersPaged/GetUsersPagedQuery.cs
+namespace Company.Product.Application.Users.Queries.GetUsersPaged;
+
+public record GetUsersPagedQuery : IRequest<Result<PagedResult<UserResponse>>>
+{
+    public int Page     { get; init; } = 1;
+    public int PageSize { get; init; } = 10;
+    public string? Search { get; init; }
+}
+
+public class GetUsersPagedQueryHandler
+    : IRequestHandler<GetUsersPagedQuery, Result<PagedResult<UserResponse>>>
+{
+    private readonly IRepository<User, Guid> _repository;
+    private readonly IMapper _mapper;
+
+    public GetUsersPagedQueryHandler(IRepository<User, Guid> repository, IMapper mapper)
+    {
+        _repository = repository;
+        _mapper     = mapper;
+    }
+
+    public async Task<Result<PagedResult<UserResponse>>> Handle(
+        GetUsersPagedQuery request,
+        CancellationToken cancellationToken)
+    {
+        Expression<Func<User, bool>>? filter = request.Search is not null
+            ? u => u.FirstName.Contains(request.Search) ||
+                   u.LastName.Contains(request.Search)  ||
+                   u.Email.Contains(request.Search)
+            : null;
+
+        var paged = await _repository.PagedAsync(
+            filter, request.Page, request.PageSize, cancellationToken);
+
+        var dtos = _mapper.Map<List<UserResponse>>(paged.Items);
+        return Result.Success(
+            new PagedResult<UserResponse>(dtos, paged.Total, paged.Page, paged.PageSize));
+    }
+}
+```
+
+### 4. Pipeline Behaviors (registrar uma vez por projeto)
+
+```csharp
+// Application/Common/Behaviors/ValidationBehavior.cs
+public class ValidationBehavior<TRequest, TResponse>(
+    IEnumerable<IValidator<TRequest>> validators)
+    : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : IRequest<TResponse>
+{
+    public async Task<TResponse> Handle(
+        TRequest request,
+        RequestHandlerDelegate<TResponse> next,
+        CancellationToken cancellationToken)
+    {
+        if (!validators.Any()) return await next();
+
+        var context = new ValidationContext<TRequest>(request);
+        var failures = validators
+            .Select(v => v.Validate(context))
+            .SelectMany(r => r.Errors)
+            .Where(f => f is not null)
+            .ToList();
+
+        if (failures.Count > 0)
+            throw new ValidationException(failures);
+
+        return await next();
+    }
+}
+
+// Application/Common/Behaviors/LoggingBehavior.cs
+public class LoggingBehavior<TRequest, TResponse>(
+    ILogger<LoggingBehavior<TRequest, TResponse>> logger)
+    : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : IRequest<TResponse>
+{
+    public async Task<TResponse> Handle(
+        TRequest request,
+        RequestHandlerDelegate<TResponse> next,
+        CancellationToken cancellationToken)
+    {
+        var requestName = typeof(TRequest).Name;
+        // ⚠️ {@Request} pode expor dados sensíveis (PII) — avalie mascarar campos antes de subir para produção
+        logger.LogInformation("Handling {RequestName}: {@Request}", requestName, request);
+
+        var response = await next();
+
+        logger.LogInformation("Handled {RequestName}", requestName);
+        return response;
+    }
+}
+```
+
+### 5. Registro em DI (Program.cs / ApplicationExtensions.cs)
+
+```csharp
+// Application/DependencyInjection.cs
+public static class ApplicationServiceExtensions
+{
+    public static IServiceCollection AddApplication(this IServiceCollection services)
+    {
+        var assembly = typeof(ApplicationServiceExtensions).Assembly;
+
+        services.AddMediatR(cfg =>
+        {
+            cfg.RegisterServicesFromAssembly(assembly);
+
+            // Behaviors na ordem correta
+            cfg.AddBehavior(typeof(IPipelineBehavior<,>), typeof(LoggingBehavior<,>));
+            cfg.AddBehavior(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
+        });
+
+        services.AddValidatorsFromAssembly(assembly);
+        services.AddAutoMapper(assembly);
+
+        return services;
+    }
+}
+```
+
+---
+
+## Exemplos de Uso
+
+### Cenário 1 — Controller disparando Command
+
+```csharp
+[HttpPost]
+public async Task<IActionResult> Create(
+    [FromBody] CreateUserCommand command,
+    CancellationToken ct)
+    => HandleResult(await _mediator.Send(command, ct));
+```
+
+### Cenário 2 — Controller disparando Query paginada
+
+```csharp
+[HttpGet]
+public async Task<IActionResult> GetAll(
+    [FromQuery] int page = 1,
+    [FromQuery] int pageSize = 10,
+    [FromQuery] string? search = null,
+    CancellationToken ct = default)
+    => HandleResult(await _mediator.Send(
+        new GetUsersPagedQuery { Page = page, PageSize = pageSize, Search = search }, ct));
+```
+
+### Cenário 3 — Delete retornando Unit
+
+```csharp
+public record DeleteUserCommand(Guid Id) : IRequest<Result>;
+
+public class DeleteUserCommandHandler : IRequestHandler<DeleteUserCommand, Result>
+{
+    public async Task<Result> Handle(DeleteUserCommand request, CancellationToken ct)
+    {
+        var user = await _repository.GetByIdAsync(request.Id, ct);
+        if (user is null)
+            return Result.Failure(Error.NotFound("User.NotFound", "User not found"));
+
+        await _repository.DeleteAsync(user, ct);
+        await _unitOfWork.SaveChangesAsync(ct);
+
+        return Result.Success();
+    }
+}
+```
+
+---
+
+## Checklist de Qualidade
+
+- [ ] Command/Query como `record` imutável com `IRequest<Result<T>>`
+- [ ] Validator no **mesmo arquivo** do command/query
+- [ ] Handler com **todos** os serviços injetados via construtor (primary constructor preferido)
+- [ ] Handler retorna `Result<T>` — **nunca lança exceção para controle de fluxo**
+- [ ] Logging com **template estruturado** (sem string interpolation)
+- [ ] Cada use case em **pasta própria** (`Commands/CreateUser/`, `Queries/GetUserById/`)
+- [ ] Pipeline behaviors registrados: `LoggingBehavior` → `ValidationBehavior`
+- [ ] Queries **nunca** chamam `SaveChangesAsync`
+
+---
+
+## Dependências NuGet
+
+```xml
+<PackageReference Include="MediatR" Version="12.*" />
+<PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="11.*" />
+<PackageReference Include="AutoMapper" Version="13.*" />
+```
+
+## Rules Relacionadas
+
+- `@use-cases` — regra base desta skill
+- `@fluentvalidation` — validadores dos commands/queries
+- `@api-controllers` — controllers que disparam os use cases
+- `@unit-testing` — como testar handlers

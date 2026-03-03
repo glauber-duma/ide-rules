@@ -1,0 +1,333 @@
+# Skill: Scaffold Completo de Projeto API
+
+## Visão Geral
+
+> **Quando invocar:** usuário pede projeto do zero, scaffolding completo, estrutura de solução .NET ou qualquer combinação de "criar projeto + API + banco + docker".
+
+---
+
+## Árvore de Decisão
+
+Antes de iniciar, identificar o tipo de projeto:
+
+```
+Projeto C#/.NET?
+│
+├── API REST?
+│   ├── Com autenticação JWT? → api-mvc-auth-observability
+│   └── Sem autenticação?     → api-mvc-simple-observability
+│
+├── Web MVC (server-side rendering)?
+│   ├── Com login (Identity)? → web-mvc-auth-observability
+│   └── Portal interno?       → web-mvc-simple-observability
+│
+├── Console / Batch?
+│   ├── Resiliência + mensageria? → console-batch-complete-observability
+│   └── ETL simples?              → console-batch-simple-observability
+│
+├── Desktop Blazor Hybrid?
+│   ├── Com auth + offline?  → desktop-blazor-complete-auth-observability
+│   ├── Com auth apenas?     → desktop-blazor-simple-auth-observability
+│   ├── Offline, sem auth?   → desktop-blazor-complete-observability
+│   └── Simples, sem auth?   → desktop-blazor-simple-observability
+│
+└── Microsserviços?
+    ├── Com Dapr completo?   → microservices-dapr-complete-observability
+    ├── Com Dapr simples?    → microservices-dapr-simple-observability
+    ├── Sem Dapr, completo?  → microservices-complete-observability
+    └── Sem Dapr, simples?   → microservices-simple-observability
+```
+
+---
+
+## Estrutura Completa — API MVC Simples (referência)
+
+```
+MySolution/
+├── MySolution.sln
+├── .gitignore
+├── .editorconfig
+├── README.md
+├── Dockerfile
+├── .dockerignore
+├── docker-compose.yml
+├── docker-compose.override.yml
+│
+├── src/
+│   ├── Api/                          ← Presentation Layer
+│   │   ├── Controllers/
+│   │   │   ├── BaseApiController.cs
+│   │   │   └── v1/
+│   │   │       ├── UsersController.cs
+│   │   │       └── ProductsController.cs
+│   │   ├── Middleware/
+│   │   │   └── CorrelationIdMiddleware.cs
+│   │   ├── Extensions/
+│   │   │   └── ObservabilityExtensions.cs
+│   │   ├── Models/
+│   │   │   └── ApiProblemDetails.cs
+│   │   ├── Program.cs
+│   │   ├── Api.csproj
+│   │   ├── appsettings.json
+│   │   └── appsettings.Development.json
+│   │
+│   ├── Application/                  ← Application Layer (Use Cases)
+│   │   ├── Users/
+│   │   │   ├── Commands/
+│   │   │   │   ├── CreateUser/
+│   │   │   │   │   └── CreateUserCommand.cs
+│   │   │   │   └── DeleteUser/
+│   │   │   │       └── DeleteUserCommand.cs
+│   │   │   └── Queries/
+│   │   │       ├── GetUserById/
+│   │   │       │   └── GetUserByIdQuery.cs
+│   │   │       └── GetUsersPaged/
+│   │   │           └── GetUsersPagedQuery.cs
+│   │   ├── Common/
+│   │   │   ├── IRepository.cs
+│   │   │   ├── IUnitOfWork.cs
+│   │   │   ├── PagedResult.cs
+│   │   │   └── Behaviors/
+│   │   │       ├── ValidationBehavior.cs
+│   │   │       └── LoggingBehavior.cs
+│   │   ├── Mappings/
+│   │   │   └── UserMappingProfile.cs
+│   │   ├── DependencyInjection.cs
+│   │   └── Application.csproj
+│   │
+│   ├── Domain/                       ← Domain Layer (Entidades e Regras)
+│   │   ├── Entities/
+│   │   │   └── User.cs               ← entidade + validator
+│   │   ├── ValueObjects/
+│   │   │   └── Email.cs
+│   │   ├── Primitives/
+│   │   │   ├── Result.cs
+│   │   │   ├── Error.cs
+│   │   │   └── EntityBase.cs
+│   │   └── Domain.csproj
+│   │
+│   └── Infrastructure/               ← Infrastructure Layer (Dados, Ext. Services)
+│       ├── Data/
+│       │   ├── AppDbContext.cs
+│       │   ├── Configurations/
+│       │   │   └── UserConfiguration.cs
+│       │   └── Repositories/
+│       │       ├── EfRepository.cs
+│       │       └── UserRepository.cs
+│       ├── DependencyInjection.cs
+│       └── Infrastructure.csproj
+│
+└── tests/
+    └── Unit/
+        ├── Application/
+        │   └── Commands/
+        │       └── CreateUserCommandHandlerTests.cs
+        ├── Domain/
+        │   └── Entities/
+        │       └── UserTests.cs
+        ├── Builders/
+        │   ├── UserBuilder.cs
+        │   └── CreateUserCommandBuilder.cs
+        └── Unit.Tests.csproj
+```
+
+---
+
+## Ordem de Criação Recomendada
+
+Seguir esta sequência evita dependências circulares e facilita o desenvolvimento incremental:
+
+```
+1. Domain/Primitives/     → Result, Error, ErrorType, EntityBase
+2. Domain/Entities/       → entidades + validators          [skill: entity-domain]
+3. Application/Common/    → IRepository, PagedResult, IUnitOfWork
+4. Infrastructure/Data/   → AppDbContext, EfRepository, Configurations  [skill: repository-efcore]
+5. Application/Behaviors/ → ValidationBehavior, LoggingBehavior
+6. Application/Use Cases/ → Commands + Queries + Handlers   [skill: use-case-cqrs]
+7. Api/Models/            → ApiProblemDetails, BaseApiController  [skill: api-controller]
+8. Api/Controllers/       → controllers específicos         [skill: api-controller]
+9. Api/Extensions/        → observabilidade, DI             [skill: observability-setup]
+10. Dockerfile + compose  → containerização                  [skill: docker-setup]
+11. tests/Unit/           → testes unitários                 [skill: unit-test-scaffold]
+```
+
+---
+
+## Criação da Solução — Comandos CLI
+
+```bash
+# 1. Criar solução e projetos
+dotnet new sln -n MySolution
+dotnet new webapi -n Api --framework net9.0 --no-openapi -o src/Api
+dotnet new classlib -n Application --framework net9.0 -o src/Application
+dotnet new classlib -n Domain --framework net9.0 -o src/Domain
+dotnet new classlib -n Infrastructure --framework net9.0 -o src/Infrastructure
+dotnet new xunit -n Unit.Tests --framework net9.0 -o tests/Unit
+
+# 2. Adicionar à solução
+dotnet sln add src/Api/Api.csproj
+dotnet sln add src/Application/Application.csproj
+dotnet sln add src/Domain/Domain.csproj
+dotnet sln add src/Infrastructure/Infrastructure.csproj
+dotnet sln add tests/Unit/Unit.Tests.csproj
+
+# 3. Referências entre projetos
+dotnet add src/Api/Api.csproj reference src/Application/Application.csproj
+dotnet add src/Application/Application.csproj reference src/Domain/Domain.csproj
+dotnet add src/Infrastructure/Infrastructure.csproj reference src/Application/Application.csproj
+dotnet add src/Infrastructure/Infrastructure.csproj reference src/Domain/Domain.csproj
+dotnet add tests/Unit/Unit.Tests.csproj reference src/Application/Application.csproj
+dotnet add tests/Unit/Unit.Tests.csproj reference src/Domain/Domain.csproj
+
+# 4. Pacotes NuGet — Domain
+dotnet add src/Domain/Domain.csproj package FluentValidation
+
+# 5. Pacotes NuGet — Application
+dotnet add src/Application/Application.csproj package MediatR
+dotnet add src/Application/Application.csproj package FluentValidation.DependencyInjectionExtensions
+dotnet add src/Application/Application.csproj package AutoMapper
+
+# 6. Pacotes NuGet — Infrastructure
+dotnet add src/Infrastructure/Infrastructure.csproj package Microsoft.EntityFrameworkCore.SqlServer
+dotnet add src/Infrastructure/Infrastructure.csproj package Microsoft.EntityFrameworkCore.Design
+
+# 7. Pacotes NuGet — Api
+dotnet add src/Api/Api.csproj package Serilog.AspNetCore
+dotnet add src/Api/Api.csproj package Serilog.Formatting.Compact
+dotnet add src/Api/Api.csproj package OpenTelemetry.Extensions.Hosting
+dotnet add src/Api/Api.csproj package OpenTelemetry.Instrumentation.AspNetCore
+dotnet add src/Api/Api.csproj package Asp.Versioning.Mvc
+dotnet add src/Api/Api.csproj package Swashbuckle.AspNetCore
+dotnet add src/Api/Api.csproj package AspNetCore.HealthChecks.SqlServer
+
+# 8. Pacotes NuGet — Testes
+dotnet add tests/Unit/Unit.Tests.csproj package Moq
+dotnet add tests/Unit/Unit.Tests.csproj package Bogus
+dotnet add tests/Unit/Unit.Tests.csproj package FluentAssertions
+dotnet add tests/Unit/Unit.Tests.csproj package Microsoft.Extensions.Logging.Abstractions
+```
+
+---
+
+## GlobalUsings.cs — por projeto
+
+```csharp
+// src/Domain/GlobalUsings.cs
+global using FluentValidation;
+
+// src/Application/GlobalUsings.cs
+global using MediatR;
+global using FluentValidation;
+global using System.Linq.Expressions;
+global using Company.Product.Domain.Primitives;
+global using Company.Product.Application.Common;
+
+// src/Infrastructure/GlobalUsings.cs
+global using Microsoft.EntityFrameworkCore;
+global using Company.Product.Application.Common;
+global using Company.Product.Domain.Primitives;
+
+// src/Api/GlobalUsings.cs
+global using Microsoft.AspNetCore.Mvc;
+global using MediatR;
+global using Company.Product.Domain.Primitives;
+
+// tests/Unit/GlobalUsings.cs
+global using Xunit;
+global using Moq;
+global using FluentAssertions;
+global using System.Linq.Expressions;
+```
+
+---
+
+## .editorconfig — padronização de estilo
+
+```editorconfig
+root = true
+
+[*.cs]
+indent_style = space
+indent_size = 4
+end_of_line = lf
+charset = utf-8-bom
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Namespaces file-scoped obrigatório
+csharp_style_namespace_declarations = file_scoped:error
+
+# var explícito quando tipo não é óbvio
+csharp_style_var_for_built_in_types = false:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+
+# Primary constructors preferidos
+csharp_style_prefer_primary_constructors = true:suggestion
+
+# Collection expressions
+dotnet_style_prefer_collection_expression = when_types_loosely_match:suggestion
+```
+
+---
+
+## Checklist de Prontidão do Projeto
+
+### Estrutura
+- [ ] Solução com 4 projetos: `Domain`, `Application`, `Infrastructure`, `Api`
+- [ ] Projeto de testes: `Unit.Tests`
+- [ ] `GlobalUsings.cs` em cada projeto
+- [ ] `.editorconfig` na raiz
+
+### Domain
+- [ ] `EntityBase` com `Id`, `CreatedAt`, `UpdatedAt`
+- [ ] `Result<T>`, `Error`, `ErrorType` em `Domain/Primitives/`
+- [ ] Pelo menos uma entidade com validator
+
+### Application
+- [ ] `IRepository<TClass, TType>` em `Application/Common/`
+- [ ] `PagedResult<T>` como record
+- [ ] Pelo menos um Command + Handler + Validator
+- [ ] Pelo menos uma Query + Handler
+- [ ] `ValidationBehavior` + `LoggingBehavior` registrados
+
+### Infrastructure
+- [ ] `AppDbContext` com `ApplyConfigurationsFromAssembly`
+- [ ] `EfRepository` genérico
+- [ ] `IEntityTypeConfiguration` por entidade em arquivo separado
+- [ ] `DependencyInjection.cs` com todos os registros
+
+### Api
+- [ ] `BaseApiController` com `HandleResult()`
+- [ ] `ApiProblemDetails` (RFC 7807)
+- [ ] `CorrelationIdMiddleware`
+- [ ] Observabilidade: Serilog + OpenTelemetry
+- [ ] Health Checks: `/health/live` + `/health/ready`
+- [ ] Versionamento de API configurado
+- [ ] Swagger/OpenAPI habilitado
+
+### DevOps
+- [ ] `Dockerfile` multi-stage + non-root
+- [ ] `.dockerignore`
+- [ ] `docker-compose.yml` com app + db + jaeger
+- [ ] `.env.example`
+
+### Testes
+- [ ] Testes para handlers (commands + queries)
+- [ ] Testes para entidades de domínio
+- [ ] Testes para validators
+- [ ] `UserBuilder` (ou equivalente) com Bogus
+
+---
+
+## Skills Envolvidas
+
+| Etapa | Skill |
+|---|---|
+| Entidades de domínio | `entity-domain` |
+| Repositório EF Core | `repository-efcore` |
+| Repositório Dapper | `repository-dapper` |
+| Use Cases CQRS | `use-case-cqrs` |
+| Controllers API | `api-controller` |
+| Observabilidade | `observability-setup` |
+| Docker | `docker-setup` |
+| Testes unitários | `unit-test-scaffold` |
