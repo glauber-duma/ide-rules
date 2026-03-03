@@ -4,158 +4,196 @@ Conjunto de regras para uso no VS Code e Cursor, com guias completos e prompts p
 
 ## Visao geral
 
-Este repositorio organiza rules (.mdc) e prompts (.md) para:
+Este repositorio organiza rules (`.mdc`), prompts (`.md`) e **skills** (`.mdc`) para:
 
 - Padroes de codigo e estilo.
 - Arquitetura e organizacao de projetos.
-- Boas praticas especificas (API, middleware, validacao, seguranca, cache, dados, mensageria, etc.).
-- Templates de referencia para equipes, agora com exemplos de codigo, configuracao de observabilidade e conteinerizacao (Docker/Docker Compose para cenarios Dapr), incluindo entidades com sets privados, validacao FluentValidation e repositorios genericos EF Core (Dapper apenas para cenarios simples) e controllers/handlers seguindo use cases com Mediator.
+- Boas praticas especificas (API, middleware, validacao, seguranca, observabilidade, Docker, testes, etc.).
+- Templates de referencia prontos para equipes usando **.NET 9 / C# 12** com Clean Architecture, CQRS (MediatR), Result Pattern, FluentValidation, EF Core 9, Serilog, OpenTelemetry e xUnit.
 
 ## Estrutura
 
 ```
 cursor_rules/
-	csharp/
-		general/
-			csharp-style-guide.mdc
-			entity-validator.mdc
-			efcore-repository.mdc
-			dapper-repository.mdc
-			prompt_style_guide.md
-			prompt_entity_validator.md
-			prompt_efcore_repository.md
-			prompt_dapper_repository.md
-		inso/
-			app-batch.mdc
-			prompt_app_batch.md
-		prompts/
-			prompt-api-mvc-auth-observability.md
-			prompt-api-mvc-simple-observability.md
-			prompt-console-batch-complete-observability.md
-			prompt-console-batch-simple-observability.md
-			prompt-desktop-blazor-complete-auth-observability.md
-			prompt-desktop-blazor-complete-observability.md
-			prompt-desktop-blazor-simple-auth-observability.md
-			prompt-desktop-blazor-simple-observability.md
-			prompt-microservices-complete-observability.md
-			prompt-microservices-dapr-complete-observability.md
-			prompt-microservices-dapr-simple-observability.md
-			prompt-microservices-simple-observability.md
-			prompt-web-mvc-auth-observability.md
-			prompt-web-mvc-simple-observability.md
-		rules/
-			api-mvc-auth-observability.mdc
-			api-mvc-simple-observability.mdc
-			console-batch-complete-observability.mdc
-			console-batch-simple-observability.mdc
-			desktop-blazor-complete-auth-observability.mdc
-			desktop-blazor-complete-observability.mdc
-			desktop-blazor-simple-auth-observability.mdc
-			desktop-blazor-simple-observability.mdc
-			microservices-complete-observability.mdc
-			microservices-dapr-complete-observability.mdc
-			microservices-dapr-simple-observability.mdc
-			microservices-simple-observability.mdc
-			web-mvc-auth-observability.mdc
-			web-mvc-simple-observability.mdc
-	python/
-		api/
-			fastapi-project.mdc
-			fastapi-endpoints.mdc
-			fastapi-validation.mdc
-			fastapi-middleware.mdc
-			fastapi-exception.mdc
-			fastapi-security.mdc
-			prompt-project.md
-			prompt-endpoints.md
-			prompt-validation.md
-			prompt-middleware.md
-			prompt-excecoes.md
-			prompt-security.md
-		general/
-			python-style-guide.mdc
-			python-cache.mdc
-			python-database.mdc
-			python-dependencies.mdc
-			python-environments.mdc
-			python-messaging.mdc
-			prompt-python-style-guide.md
-			prompt-cache.md
-			prompt-database.md
-			prompt-dependencies.md
-			prompt-environments.md
-			prompt-messaging.md
-		skills/
-			clean-architecture.mdc
-			dapr-integration.mdc
-			dependency-injection.mdc
+    csharp/
+        AGENTS.MD                       ← catálogo mestre (alwaysApply: true)
+        general/
+            csharp-style-guide.mdc
+            entity-validator.mdc
+            efcore-repository.mdc
+            dapper-repository.mdc
+            fluentvalidation.mdc
+            use-cases.mdc
+            api-controllers.mdc
+            observability.mdc
+            docker-containers.mdc
+            unit-testing.mdc
+        inso/
+            app-batch.mdc
+        prompts/
+            prompt-api-mvc-auth-observability.md
+            prompt-api-mvc-simple-observability.md
+            prompt-console-batch-complete-observability.md
+            prompt-console-batch-simple-observability.md
+            prompt-desktop-blazor-complete-auth-observability.md
+            prompt-desktop-blazor-complete-observability.md
+            prompt-desktop-blazor-simple-auth-observability.md
+            prompt-desktop-blazor-simple-observability.md
+            prompt-microservices-complete-observability.md
+            prompt-microservices-dapr-complete-observability.md
+            prompt-microservices-dapr-simple-observability.md
+            prompt-microservices-simple-observability.md
+            prompt-web-mvc-auth-observability.md
+            prompt-web-mvc-simple-observability.md
+        rules/
+            api-mvc-auth-observability.mdc
+            api-mvc-simple-observability.mdc
+            console-batch-complete-observability.mdc
+            console-batch-simple-observability.mdc
+            desktop-blazor-complete-auth-observability.mdc
+            desktop-blazor-complete-observability.mdc
+            desktop-blazor-simple-auth-observability.mdc
+            desktop-blazor-simple-observability.mdc
+            microservices-complete-observability.mdc
+            microservices-dapr-complete-observability.mdc
+            microservices-dapr-simple-observability.mdc
+            microservices-simple-observability.mdc
+            web-mvc-auth-observability.mdc
+            web-mvc-simple-observability.mdc
+        skills/
+            entity-domain.mdc
+            repository-efcore.mdc
+            repository-dapper.mdc
+            use-case-cqrs.mdc
+            api-controller.mdc
+            observability-setup.mdc
+            docker-setup.mdc
+            unit-test-scaffold.mdc
+            scaffold-api-project.mdc
+    python/
+        api/
+            fastapi-project.mdc
+            fastapi-endpoints.mdc
+            fastapi-validation.mdc
+            fastapi-middleware.mdc
+            fastapi-exception.mdc
+            fastapi-security.mdc
+        general/
+            python-style-guide.mdc
+            python-cache.mdc
+            python-database.mdc
+            python-dependencies.mdc
+            python-environments.mdc
+            python-messaging.mdc
+        skills/
+            clean-architecture.mdc
+            dapr-integration.mdc
+            dependency-injection.mdc
 ```
 
 ## O que sao os arquivos
 
-- `.mdc`: rules prontas para uso em tooling (Cursor/VS Code).
-- `.md`: prompts de apoio usados para gerar ou expandir rules.
+| Tipo | Descricao |
+|---|---|
+| `AGENTS.MD` | Catalogo mestre com `alwaysApply: true` — o agente carrega automaticamente em toda sessao C# |
+| `.mdc` (rules) | Regras declarativas de arquitetura e estilo — o agente consulta ao raciocinar |
+| `.mdc` (skills) | Guias procedurais com codigo pronto para gerar — o agente executa ao criar artefatos |
+| `.md` (prompts) | Prompts de apoio para gerar ou expandir rules existentes |
 
 ## Como usar
 
-1. Escolha a regra apropriada na arvore `cursor_rules/`.
-2. Aplique no editor (Cursor/VS Code) conforme o fluxo do seu time.
-3. Use os prompts quando precisar gerar uma nova versao da regra ou ampliar exemplos; regras de microservicos incluem Dockerfile e docker-compose (sidecar Dapr, Kafka, Redis) e componentes Dapr prontos para pub/sub e state, além de entidades de exemplo com validacao FluentValidation, repositorios genericos `IRepository<TClass, TType>` para EF Core, Dapper para cenarios simples, e controllers/handlers no padrao use case com Mediator.
+1. O `AGENTS.MD` e carregado automaticamente em toda sessao — nao e necessario referenciar manualmente.
+2. Para gerar um artefato especifico (entidade, repositorio, controller, etc.), invoque a **skill** correspondente.
+3. Para scaffolding completo de projeto, use a skill `scaffold-api-project` — ela orquestra todas as demais na ordem correta.
+4. Para expandir ou criar novas rules, use os prompts em `prompts/`.
 
-## Regras disponiveis (resumo)
+## Rules disponiveis (resumo)
 
-### C#
+### C# / General
 
-- `csharp-style-guide.mdc`: guia de estilo e boas praticas para projetos .NET.
-- `entity-validator.mdc`: snippet base de entidade EF Core com validacao FluentValidation (sets privados, construtores com validacao, metodos que revalidam) para reaproveitar em outras rules; EF Core como padrao e Dapper apenas em cenarios simples.
-- `efcore-repository.mdc`: snippet base de repositorio generico EF Core (`IRepository<TClass, TType>` + `EfRepository<TClass, TType>` com CRUD/filtro/paginacao e `PagedResult<T>`), para reuso entre rules.
-- `dapper-repository.mdc`: snippet base de repositorio generico Dapper para aplicacoes simples (CRUD, filtro, paginacao, `PagedResult<T>`), reforcando que Dapper e para modelo pequeno e sem tracking/lazy loading.
-- `app-batch.mdc`: padroes para console apps e processamento em lote.
-- `web-mvc-simple-observability.mdc`: MVC simples sem autenticacao, com observabilidade.
-- `web-mvc-auth-observability.mdc`: MVC com autenticacao/autorizacao e observabilidade.
-- `api-mvc-simple-observability.mdc`: API MVC simples sem autenticacao, com observabilidade, entidades validadas e repositorio generico EF Core (Dapper em cenarios simples).
-- `api-mvc-auth-observability.mdc`: API MVC com autenticacao/autorizacao e observabilidade, entidades validadas e repositorio generico EF Core.
-- `microservices-dapr-simple-observability.mdc`: microservicos simples com Dapr, Dockerfile, docker-compose (sidecar), componentes Kafka/Redis e exemplos de publish/subscribe.
-- `microservices-dapr-complete-observability.mdc`: microservicos completos com Dapr, resiliencia, Dockerfile, docker-compose (sidecar), componentes Kafka/Redis e exemplos de handlers.
-- `microservices-simple-observability.mdc`: microservicos simples sem Dapr, com observabilidade, Dockerfile e testes.
-- `microservices-complete-observability.mdc`: microservicos completos sem Dapr, com resiliencia (Polly), mensageria (Kafka), Dockerfile e docker-compose.
-- `console-batch-simple-observability.mdc`: batch simples para integracao legada.
-- `console-batch-complete-observability.mdc`: batch completo para integracao legada.
-- `desktop-blazor-simple-observability.mdc`: desktop Blazor Hybrid simples.
-- `desktop-blazor-complete-observability.mdc`: desktop Blazor Hybrid completo.
-- `desktop-blazor-simple-auth-observability.mdc`: desktop Blazor Hybrid com auth.
-- `desktop-blazor-complete-auth-observability.mdc`: desktop Blazor Hybrid completo com auth.
+| Rule | Descricao |
+|---|---|
+| `csharp-style-guide` | Guia de estilo C# 12/.NET 9: namespaces file-scoped, primary constructors, collection expressions, etc. |
+| `entity-validator` | Entidade de dominio com setters privados e validacao FluentValidation embutida |
+| `efcore-repository` | Repositorio generico EF Core (`IRepository<TClass, TType>` + paginacao + `IEntityTypeConfiguration`) |
+| `dapper-repository` | Repositorio Dapper para modelos simples sem tracking/lazy loading |
+| `fluentvalidation` | Padroes de validators com AbstractValidator, RuleFor e mensagens padronizadas |
+| `use-cases` | CQRS com MediatR: Commands, Queries, Handlers e Pipeline Behaviors |
+| `api-controllers` | BaseApiController, Result Pattern (RFC 7807), versionamento de API |
+| `observability` | Serilog, OpenTelemetry, CorrelationId Middleware e Health Checks |
+| `docker-containers` | Dockerfile multi-stage non-root e docker-compose para .NET |
+| `unit-testing` | xUnit + Moq + Bogus + FluentAssertions, padrao AAA e Builder Pattern |
+
+### C# / Rules de Arquitetura (14 combinacoes)
+
+| Rule | Descricao |
+|---|---|
+| `api-mvc-simple-observability` | API REST sem autenticacao, com observabilidade |
+| `api-mvc-auth-observability` | API REST com JWT, com observabilidade |
+| `web-mvc-simple-observability` | MVC server-side sem autenticacao |
+| `web-mvc-auth-observability` | MVC server-side com Identity |
+| `console-batch-simple-observability` | Batch/ETL simples |
+| `console-batch-complete-observability` | Batch/ETL com resiliencia e mensageria |
+| `desktop-blazor-simple-observability` | Blazor Hybrid sem auth |
+| `desktop-blazor-complete-observability` | Blazor Hybrid com suporte offline |
+| `desktop-blazor-simple-auth-observability` | Blazor Hybrid com auth |
+| `desktop-blazor-complete-auth-observability` | Blazor Hybrid completo com auth e offline |
+| `microservices-simple-observability` | Microsservicos sem Dapr |
+| `microservices-complete-observability` | Microsservicos com Polly, Kafka e Docker |
+| `microservices-dapr-simple-observability` | Microsservicos com Dapr (sidecar, pub/sub, state) |
+| `microservices-dapr-complete-observability` | Microsservicos Dapr completos com resiliencia |
+
+### C# / Skills (codigo gerado pelo agente)
+
+| Skill | O que gera |
+|---|---|
+| `entity-domain` | EntityBase, entidade com FluentValidation, Value Objects e Domain Events |
+| `repository-efcore` | IRepository, EfRepository, AppDbContext, IEntityTypeConfiguration e DI |
+| `repository-dapper` | IDapperRepository, DapperRepository, repositorio especifico e DI |
+| `use-case-cqrs` | Command/Query/Handler, ValidationBehavior, LoggingBehavior e DI |
+| `api-controller` | Result/Error primitivos, BaseApiController, ApiProblemDetails e CRUD controller |
+| `observability-setup` | Serilog, OpenTelemetry, CorrelationIdMiddleware, Health Checks e Program.cs |
+| `docker-setup` | Dockerfile (multi-stage, non-root), docker-compose, .dockerignore e .env |
+| `unit-test-scaffold` | Projeto xUnit, UserBuilder (Bogus), testes de handler/entidade/validator |
+| `scaffold-api-project` | Arvore de decisao, estrutura completa, CLI commands e checklist de prontidao |
 
 ### Python / FastAPI
 
-- `fastapi-project.mdc`: estrutura de projeto e configuracao base.
-- `fastapi-endpoints.mdc`: padroes de endpoints REST.
-- `fastapi-validation.mdc`: validacao com Pydantic.
-- `fastapi-middleware.mdc`: middlewares e interceptadores.
-- `fastapi-exception.mdc`: tratamento de excecoes e handlers.
-- `fastapi-security.mdc`: seguranca, autenticacao e autorizacao.
+| Rule | Descricao |
+|---|---|
+| `fastapi-project` | Estrutura de projeto e configuracao base |
+| `fastapi-endpoints` | Padroes de endpoints REST |
+| `fastapi-validation` | Validacao com Pydantic |
+| `fastapi-middleware` | Middlewares e interceptadores |
+| `fastapi-exception` | Tratamento de excecoes e handlers |
+| `fastapi-security` | Seguranca, autenticacao e autorizacao |
 
 ### Python / General
 
-- `python-style-guide.mdc`: convencoes de estilo e type hints.
-- `python-cache.mdc`: estrategias de cache.
-- `python-database.mdc`: integracao com banco de dados e migrations.
-- `python-dependencies.mdc`: gerenciamento de dependencias.
-- `python-environments.mdc`: ambientes e setups.
-- `python-messaging.mdc`: mensageria e eventos.
+| Rule | Descricao |
+|---|---|
+| `python-style-guide` | Convencoes de estilo e type hints |
+| `python-cache` | Estrategias de cache |
+| `python-database` | Integracao com banco de dados e migrations |
+| `python-dependencies` | Gerenciamento de dependencias |
+| `python-environments` | Ambientes e setups |
+| `python-messaging` | Mensageria e eventos |
 
-### Skills (Python)
+### Python / Skills
 
-- `clean-architecture.mdc`: principios e estrutura.
-- `dependency-injection.mdc`: DI com dependency-injector.
-- `dapr-integration.mdc`: padroes com Dapr.
+| Skill | Descricao |
+|---|---|
+| `clean-architecture` | Principios e estrutura de Clean Architecture |
+| `dependency-injection` | DI com dependency-injector |
+| `dapr-integration` | Padroes com Dapr |
 
 ## Contribuicao
 
 - Mantenha consistencia com as rules existentes.
 - Prefira adicionar exemplos completos e prontos para uso.
-- Evite depender de bibliotecas nao padronizadas pela equipe.
+- Skills devem seguir o padrao: Visao Geral → Estrutura de Arquivos → Passo a Passo → Exemplos → Checklist → NuGet → Rules Relacionadas.
+- Evite duplicar definicoes entre skills (ex.: `PagedResult<T>` e definido apenas em `repository-efcore`).
 
 ## Licenca
 
-Uso interno. 
+Uso interno.
